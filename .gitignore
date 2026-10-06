@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+captures/
+
+# 构建产物
+*.apk
+*.aab
+app/build/
+
+# 签名密钥（D13：绝不入库）
+keystore/
+*.jks
+*.keystore
+keystore.properties
+
+# Kotlin 编译会话 / 日志等临时产物
+.kotlin/
+bin/
+*.log
+
+# 外部第三方参考源码（非本项目产出，不入库）
+Reference Code/
