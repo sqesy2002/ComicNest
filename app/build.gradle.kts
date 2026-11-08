@@ -16,8 +16,8 @@ android {
         applicationId = "com.comicnest"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 5
+        versionName = "2.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -64,7 +64,7 @@ android {
         }
     }
 
-    // Release 产物命名为 ComicNest_<versionName>.apk（如 ComicNest_1.1.0.apk）
+    // Release 产物命名为 ComicNest_<versionName>.apk（如 ComicNest_2.1.0.apk）
     applicationVariants.all {
         val variant = this
         variant.outputs.all {
@@ -90,10 +90,12 @@ dependencies {
     implementation(projects.core.ui)
     implementation(projects.source.api)
     implementation(projects.source.local)
+    implementation(projects.source.video)
     implementation(projects.feature.library)
     implementation(projects.feature.reader)
     implementation(projects.feature.collection)
     implementation(projects.feature.settings)
+    implementation(projects.feature.video)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

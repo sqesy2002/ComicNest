@@ -69,6 +69,7 @@ fun SettingsScreen(
     }
 
     var showAddRoot by remember { mutableStateOf(false) }
+    var showAddVideoRoot by remember { mutableStateOf(false) }
     var showModeDialog by remember { mutableStateOf(false) }
     var showLicense by remember { mutableStateOf(false) }
 
@@ -104,18 +105,53 @@ fun SettingsScreen(
             item {
                 TextButton(onClick = { showAddRoot = true }, modifier = Modifier.padding(horizontal = 12.dp)) {
                     Icon(Icons.Filled.Add, contentDescription = null)
-                    Text("添加目录", modifier = Modifier.padding(start = 4.dp))
+                    Text("添加漫画目录", modifier = Modifier.padding(start = 4.dp))
                 }
             }
 
             item { Divider() }
-            item { SectionHeader("阅读") }
+            item { SectionHeader("漫画阅读方式") }
             item {
                 ListItem(
                     headlineContent = { Text("默认阅读方式") },
                     supportingContent = { Text(modeLabel(state.readerMode)) },
                     modifier = Modifier.clickable { showModeDialog = true },
                 )
+            }
+
+            item { Divider() }
+            item { SectionHeader("视频库目录") }
+            if (state.videoRoots.isEmpty()) {
+                item {
+                    Text(
+                        text = "尚未添加任何视频目录",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            state.videoRoots.forEach { root ->
+                item {
+                    ListItem(
+                        headlineContent = { Text(root.displayName) },
+                        supportingContent = { Text(root.path) },
+                        trailingContent = {
+                            IconButton(onClick = { viewModel.onRemoveVideoRoot(root) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "移除")
+                            }
+                        },
+                    )
+                }
+            }
+            item {
+                TextButton(
+                    onClick = { showAddVideoRoot = true },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Text("添加视频目录", modifier = Modifier.padding(start = 4.dp))
+                }
             }
 
             item { Divider() }
@@ -139,6 +175,19 @@ fun SettingsScreen(
             onPick = {
                 showAddRoot = false
                 viewModel.onAddRoot(it)
+            },
+        )
+    }
+
+    if (showAddVideoRoot) {
+        DirectoryPickerDialog(
+            title = "选择视频目录",
+            hint = "提示：只识别所选目录直接下一级的视频文件（不递归）；" +
+                "Android/data 等系统受限目录无法读取。",
+            onDismissRequest = { showAddVideoRoot = false },
+            onPick = {
+                showAddVideoRoot = false
+                viewModel.onAddVideoRoot(it)
             },
         )
     }

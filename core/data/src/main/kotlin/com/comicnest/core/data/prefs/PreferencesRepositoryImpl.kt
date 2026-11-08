@@ -10,6 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.comicnest.core.domain.repository.PreferencesRepository
 import com.comicnest.core.model.ReaderMode
 import com.comicnest.core.model.SortMode
+import com.comicnest.core.model.VideoSortMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.IOException
 import javax.inject.Inject
@@ -29,6 +30,7 @@ class PreferencesRepositoryImpl @Inject constructor(
     private object Keys {
         val SORT_MODE = intPreferencesKey("sort_mode")
         val READER_MODE = intPreferencesKey("reader_mode")
+        val VIDEO_SORT_MODE = intPreferencesKey("video_sort_mode")
     }
 
     private val store: DataStore<Preferences> get() = context.dataStore
@@ -47,9 +49,19 @@ class PreferencesRepositoryImpl @Inject constructor(
         store.edit { it[Keys.READER_MODE] = mode.ordinal }
     }
 
+    override fun observeVideoSortMode(): Flow<VideoSortMode> =
+        store.data.recoverOnError().map { prefs -> videoSortFrom(prefs[Keys.VIDEO_SORT_MODE]) }
+
+    override suspend fun setVideoSortMode(mode: VideoSortMode) {
+        store.edit { it[Keys.VIDEO_SORT_MODE] = mode.ordinal }
+    }
+
     private fun sortFrom(ord: Int?): SortMode = SortMode.entries.getOrNull(ord ?: -1) ?: SortMode.NAME
 
     private fun readerFrom(ord: Int?): ReaderMode = ReaderMode.entries.getOrNull(ord ?: -1) ?: ReaderMode.WEBTOON
+
+    private fun videoSortFrom(ord: Int?): VideoSortMode =
+        VideoSortMode.entries.getOrNull(ord ?: -1) ?: VideoSortMode.NAME
 }
 
 /** 读盘异常（如损坏）降级为空偏好，避免 Flow 终止（§8.2）。 */

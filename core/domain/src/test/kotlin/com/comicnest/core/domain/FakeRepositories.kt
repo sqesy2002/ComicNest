@@ -4,6 +4,7 @@ import com.comicnest.core.domain.repository.CollectionRepository
 import com.comicnest.core.domain.repository.LibraryRepository
 import com.comicnest.core.domain.repository.PreferencesRepository
 import com.comicnest.core.domain.repository.ProgressRepository
+import com.comicnest.core.domain.repository.VideoRepository
 import com.comicnest.core.model.Collection
 import com.comicnest.core.model.ComicKey
 import com.comicnest.core.model.ComicPageRef
@@ -11,7 +12,14 @@ import com.comicnest.core.model.ComicSummary
 import com.comicnest.core.model.LibraryRoot
 import com.comicnest.core.model.ReaderMode
 import com.comicnest.core.model.ReadProgress
+import com.comicnest.core.model.RecentVideo
 import com.comicnest.core.model.SortMode
+import com.comicnest.core.model.VideoKey
+import com.comicnest.core.model.VideoProgress
+import com.comicnest.core.model.VideoRoot
+import com.comicnest.core.model.VideoSortMode
+import com.comicnest.core.model.VideoSummary
+import com.comicnest.core.model.VideoThumbnailState
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -83,6 +91,7 @@ class FakeProgressRepository : ProgressRepository {
 class FakePreferencesRepository : PreferencesRepository {
     val sortFlow = MutableStateFlow(SortMode.NAME)
     val readerFlow = MutableStateFlow(ReaderMode.WEBTOON)
+    val videoSortFlow = MutableStateFlow(VideoSortMode.NAME)
     override fun observeSortMode(): Flow<SortMode> = sortFlow
     override suspend fun setSortMode(mode: SortMode) {
         sortFlow.value = mode
@@ -91,6 +100,11 @@ class FakePreferencesRepository : PreferencesRepository {
     override fun observeReaderMode(): Flow<ReaderMode> = readerFlow
     override suspend fun setReaderMode(mode: ReaderMode) {
         readerFlow.value = mode
+    }
+
+    override fun observeVideoSortMode(): Flow<VideoSortMode> = videoSortFlow
+    override suspend fun setVideoSortMode(mode: VideoSortMode) {
+        videoSortFlow.value = mode
     }
 }
 
@@ -124,3 +138,75 @@ class FakeCollectionRepository : CollectionRepository {
         return cleanupResult
     }
 }
+
+/** 视频域假仓储：记录入参结果，供 UseCase 阈值/委托规则单测。 */
+class FakeVideoRepository : VideoRepository {
+    val rootsFlow = MutableStateFlow<List<VideoRoot>>(emptyList())
+    val videosFlow = MutableStateFlow<List<VideoSummary>>(emptyList())
+    val recentFlow = MutableStateFlow<List<RecentVideo>>(emptyList())
+    val savedProgress = mutableListOf<VideoProgress>()
+    val deleted = mutableListOf<VideoKey>()
+    val generated = mutableListOf<VideoKey>()
+    val renamed = mutableListOf<Pair<VideoKey, String>>()
+    var deleteResult: Result<Unit> = Result.success(Unit)
+    var generateResult: Result<Unit> = Result.success(Unit)
+    var renameResult: Result<VideoKey>? = null
+    var progressResult: VideoProgress? = null
+
+    override fun observeRoots(): Flow<List<VideoRoot>> = rootsFlow
+
+    override suspend fun addRoot(path: String): Result<VideoRoot> =
+        Result.success(VideoRoot.of(path, path.substringAfterLast('/'), 0L))
+
+    override suspend fun removeRoot(rootId: String): Result<Unit> = Result.success(Unit)
+
+    override fun observeVideos(sort: VideoSortMode): Flow<List<VideoSummary>> = videosFlow
+
+    override suspend fun refresh(): Result<Int> = Result.success(videosFlow.value.size)
+
+    override suspend fun getVideo(key: VideoKey): Result<VideoSummary> =
+        videosFlow.value.firstOrNull { it.key == key }?.let { Result.success(it) }
+            ?: Result.failure(NoSuchElementException("no video"))
+
+    override suspend fun generateThumbnail(key: VideoKey): Result<Unit> {
+        generated += key
+        return generateResult
+    }
+
+    override suspend fun saveThumbnail(key: VideoKey, path: String, durationMs: Long?): Result<Unit> =
+        Result.success(Unit)
+
+    override suspend fun markThumbnailFailed(key: VideoKey): Result<Unit> = Result.success(Unit)
+
+    override suspend fun deleteVideo(key: VideoKey): Result<Unit> {
+        deleted += key
+        return deleteResult
+    }
+
+    override suspend fun renameVideo(key: VideoKey, newFileName: String): Result<VideoKey> {
+        renamed += key to newFileName
+        return renameResult ?: Result.success(VideoKey(key.rootId, newFileName))
+    }
+
+    override suspend fun saveProgress(key: VideoKey, positionMs: Long, durationMs: Long): Result<Unit> {
+        savedProgress += VideoProgress(key.id, positionMs, durationMs, 0L)
+        return Result.success(Unit)
+    }
+
+    override suspend fun getProgress(key: VideoKey): VideoProgress? = progressResult
+
+    override fun observeRecent(): Flow<List<RecentVideo>> = recentFlow
+}
+
+/** 视频摘要工厂（缩略图/进度默认值）。 */
+fun video(name: String, rootId: String = "vr"): VideoSummary =
+    VideoSummary(
+        key = VideoKey(rootId, name),
+        absPath = "/v/$name",
+        sizeBytes = 1L,
+        lastModified = 1L,
+        importedAt = 0L,
+        durationMs = null,
+        thumbPath = null,
+        thumbState = VideoThumbnailState.PENDING,
+    )

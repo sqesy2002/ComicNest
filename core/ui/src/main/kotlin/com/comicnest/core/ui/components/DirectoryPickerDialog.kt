@@ -46,6 +46,8 @@ import java.io.File
  * @param onPick 选定目录后回调其绝对路径。
  * @param onDismissRequest 取消/关闭时回调（用于隐藏对话框）。
  * @param initialPath 初始定位目录，缺省为外部存储根。
+ * @param title 对话框标题。
+ * @param hint 目录说明文案（漫画/视频场景不同）。
  */
 @Composable
 fun DirectoryPickerDialog(
@@ -53,6 +55,8 @@ fun DirectoryPickerDialog(
     onDismissRequest: () -> Unit,
     initialPath: String? = null,
     title: String = "选择漫画目录",
+    hint: String = "提示：请选择漫画的「上层目录」，其每个子目录识别为一部漫画；" +
+        "Android/data 等系统受限目录无法读取。",
 ) {
     val startDir = initialPath?.let { File(it) }?.takeIf { it.isDirectory } ?: defaultExternalRoot()
     var currentPath by rememberSaveable { mutableStateOf(startDir.absolutePath) }
@@ -95,8 +99,7 @@ fun DirectoryPickerDialog(
                         )
                     }
                     Text(
-                        text = "提示：请选择漫画的「上层目录」，其每个子目录识别为一部漫画；" +
-                            "Android/data 等系统受限目录无法读取。",
+                        text = hint,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp),

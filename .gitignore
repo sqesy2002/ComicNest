@@ -5,6 +5,7 @@ local.properties
 
 # IDE
 .idea/
+.vscode/
 *.iml
 .DS_Store
 captures/

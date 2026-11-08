@@ -3,8 +3,9 @@ package com.comicnest.navigation
 import android.net.Uri
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -27,10 +28,14 @@ import com.comicnest.feature.collection.ui.CollectionListScreen
 import com.comicnest.feature.library.ui.LibraryScreen
 import com.comicnest.feature.reader.ui.ReaderScreen
 import com.comicnest.feature.settings.ui.SettingsScreen
+import com.comicnest.feature.video.ui.VideoLibraryScreen
+import com.comicnest.feature.video.ui.VideoPlayerScreen
+import com.comicnest.feature.video.viewmodel.VideoPlayerViewModel
 
 /**
  * 全局导航骨架（DESIGN §3.7 / §9.1）：单 Activity + 底部导航 + NavHost。
- * 阅读器 [Routes.READER] 与收藏详情 [Routes.COLLECTION_DETAIL] 为全屏页，隐藏底部导航栏。
+ * 阅读器 [Routes.READER]、播放器 [Routes.VIDEO_PLAYER] 与收藏详情 [Routes.COLLECTION] 为全屏页，
+ * 隐藏底部导航栏。
  */
 @Composable
 fun ComicNestRoot() {
@@ -83,6 +88,23 @@ fun ComicNestRoot() {
                 // ReaderViewModel 从 SavedStateHandle 读取 comicKeyId；返回弹出阅读页
                 ReaderScreen(onBack = { navController.popBackStack() })
             }
+            composable(Routes.VIDEOS) {
+                VideoLibraryScreen(
+                    onNavigateToPlayer = { videoKeyId ->
+                        navController.navigate("${Routes.VIDEO_PLAYER}/${Uri.encode(videoKeyId)}")
+                    },
+                )
+            }
+            composable(
+                route = "${Routes.VIDEO_PLAYER}/{${VideoPlayerViewModel.ARG_VIDEO_KEY_ID}}",
+                arguments = listOf(
+                    navArgument(VideoPlayerViewModel.ARG_VIDEO_KEY_ID) {
+                        type = NavType.StringType
+                    },
+                ),
+            ) {
+                VideoPlayerScreen(onBack = { navController.popBackStack() })
+            }
             composable(Routes.COLLECTIONS) {
                 CollectionListScreen(
                     onNavigateToDetail = { id -> navController.navigate("${Routes.COLLECTION}/$id") },
@@ -106,13 +128,14 @@ fun ComicNestRoot() {
     }
 }
 
-/** 底部导航三入口（书架 / 收藏 / 设置），DESIGN §9.1。 */
+/** 底部导航四入口（书架 / 视频 / 收藏 / 设置），DESIGN v2 §9.1。 */
 enum class BottomDestination(
     val route: String,
     val label: String,
     val icon: ImageVector,
 ) {
-    Library(Routes.LIBRARY, "书架", Icons.Filled.MenuBook),
+    Library(Routes.LIBRARY, "书架", Icons.AutoMirrored.Filled.MenuBook),
+    Videos(Routes.VIDEOS, "视频", Icons.Filled.Movie),
     Collections(Routes.COLLECTIONS, "收藏", Icons.Filled.Favorite),
     Settings(Routes.SETTINGS, "设置", Icons.Filled.Settings),
 }
@@ -124,6 +147,8 @@ private val BOTTOM_BAR_ROUTES = BottomDestination.entries.map { it.route }.toSet
 object Routes {
     const val LIBRARY = "library"
     const val READER = "reader"
+    const val VIDEOS = "videos"
+    const val VIDEO_PLAYER = "video_player"
     const val COLLECTIONS = "collections"
     const val COLLECTION = "collection"
     const val SETTINGS = "settings"

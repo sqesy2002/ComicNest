@@ -30,7 +30,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,6 +47,7 @@ import com.comicnest.core.model.ReaderMode
 import com.comicnest.core.ui.component.ErrorState
 import com.comicnest.core.ui.component.FavoritesDialog
 import com.comicnest.core.ui.component.LoadingState
+import com.comicnest.core.ui.components.FullNameDialog
 import com.comicnest.feature.reader.viewmodel.ReaderUiState
 import com.comicnest.feature.reader.viewmodel.ReaderViewModel
 import com.comicnest.feature.reader.viewer.PagerViewer
@@ -55,7 +56,7 @@ import kotlin.math.roundToInt
 
 /**
  * 阅读器全屏页（DESIGN §9.4）：轻点内容区显隐上下两栏；按模式渲染 Webtoon/Pager 视图。
- * - 上栏：返回、漫画名（点名称展全名、点别处收起）、排版切换、收藏；大体保持不变。
+ * - 上栏：返回、漫画名（点击弹窗展示全名并可复制）、排版切换、收藏。
  * - 下栏：横向滑块快速翻页（左端 1、右端总页数、居中当前页），同时驱动上下与左右两种模式。
  * - 切换模式时以当前页作为新视图起点，保持页码不跳（§9.4）。
  */
@@ -72,11 +73,8 @@ fun ReaderScreen(
     val isFavorite by viewModel.isFavorite.collectAsStateWithLifecycle()
 
     var barsVisible by rememberSaveable { mutableStateOf(true) }
-    var expandedTitle by rememberSaveable { mutableStateOf(false) }
+    var showFullName by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
-
-    // 两栏隐藏（点击内容区）时，展开的全名一并收起，恢复原样。
-    LaunchedEffect(barsVisible) { if (!barsVisible) expandedTitle = false }
 
     val ready = state as? ReaderUiState.Ready
 
@@ -92,13 +90,23 @@ fun ReaderScreen(
                         }
                     },
                     title = {
-                        Text(
-                            text = if (ready != null) "${ready.title}  ${page + 1}/${ready.pages.size}" else "阅读",
-                            maxLines = if (expandedTitle) Int.MAX_VALUE else 1,
-                            overflow = if (expandedTitle) androidx.compose.ui.text.style.TextOverflow.Clip
-                            else androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.clickable { expandedTitle = !expandedTitle },
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = ready?.title ?: "阅读",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .clickable(enabled = ready != null) { showFullName = true }
+                                    .padding(vertical = 8.dp),
+                            )
+                            if (ready != null) {
+                                Text(
+                                    text = "  ${page + 1}/${ready.pages.size}",
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     },
                     actions = {
                         IconButton(onClick = viewModel::onToggleMode) {
@@ -150,6 +158,14 @@ fun ReaderScreen(
                 }
             }
         }
+    }
+
+    if (showFullName && ready != null) {
+        FullNameDialog(
+            title = "漫画全名",
+            name = ready.title,
+            onDismissRequest = { showFullName = false },
+        )
     }
 
     favorites?.let { fav ->
