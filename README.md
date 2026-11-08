@@ -1,17 +1,19 @@
 # ComicNest
 
-> 一款 **Android 纯本地漫画阅读器**：直接读取本地目录中的漫画，无需导入拷贝，支持下拉（Webtoon）与左右翻页（Pager）两种阅读方式、多收藏夹、阅读进度记忆。
+> 一款 **Android 纯本地漫画阅读器 + 视频播放器**：直接读取本地目录中的漫画与视频，无需导入拷贝。漫画支持下拉（Webtoon）与左右翻页（Pager）两种阅读方式、多收藏夹与阅读进度记忆；视频支持本地库扫描、中间帧缩略图、继续观看、倍速与长按加速播放。
 
 ![Platform](https://img.shields.io/badge/platform-Android-green.svg)
 ![Min SDK](https://img.shields.io/badge/SDK-26%2B-orange.svg)
 ![Target SDK](https://img.shields.io/badge/target%20SDK-35-blue.svg)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-purple.svg)
 ![Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-brightgreen.svg)
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-2.1.0-blue)
 
 ---
 
 ## ✨ 功能特性
+
+### 漫画
 
 - **纯本地读取**：基于「所有文件访问权限」+ 绝对路径，直接扫描并阅读本地漫画目录，不复制、不导入。
 - **两级结构模型**：`漫画库根目录 / 漫画名 / 图片`，整部漫画为单一连续阅读序列。
@@ -21,6 +23,20 @@
 - **多收藏夹**：多对多、指向式（不复制文件）；书架长按或阅读器内 ♡ 均可收藏。
 - **书架检索与分组**：左侧抽屉内搜索框模糊搜索漫画名；按每 100 本一组快速跳转。
 - **图片格式**：支持 jpg / jpeg / png / webp / gif（GIF 动画播放）等常见位图格式；不支持压缩包 / PDF / EPUB。
+
+### 视频
+
+- **本地视频库**：添加目录后只扫描所选目录的下一级视频文件（不递归）；白名单格式 mp4 / m4v / mkv / webm / ts / mov / 3gp。
+- **网格 + 继续观看**：卡片展示中间帧缩略图与时长；「继续观看」保留最近 3 条进度（LRU），点击直接续播。
+- **缩略图缓存**：卡片进入可见区域时按需解码中间帧并落盘缓存（上限 80MB，超限按最旧淘汰；文件大小/修改时间变化自动失效重生成）。
+- **播放器**：自绘控制层（进度条、±15s、0.5–2.0x 倍速、横竖屏切换）；单击显隐、双击暂停、左右滑快进/快退、左半屏上下滑亮度、右半屏上下滑音量。
+- **长按加速**：播放中长按画面任意位置临时 2x/3x 正向加速，松手恢复原倍速；暂停状态长按不生效。
+- **长按重命名 / 删除**：重命名保留扩展名，物理文件、缓存主键、观看进度与缩略图缓存同步迁移（失败自动回滚）；删除先删文件，失败则保留记录。
+- **搜索与分组**：抽屉内按文件名模糊搜索，每 50 个视频一组快速跳转。
+
+### 通用
+
+- **全名查看与复制**：阅读器点击漫画名、播放器点击视频名，弹窗展示完整名称并支持一键复制到剪贴板（点击弹窗外关闭）。
 - **Material You**：跟随系统深浅色与动态取色。
 
 ## 🧱 技术栈与关键版本
@@ -39,6 +55,7 @@
 | Room | **2.6.1** | 本地数据库 |
 | Coil | **2.7.0** | 图片加载（含 GifDecoder） |
 | Navigation Compose | **2.8.5** | 单 Activity + 底部导航 |
+| Media3 ExoPlayer | **1.5.1** | 视频播放（PlayerView，自绘控制层） |
 
 ## 📁 项目结构
 
@@ -48,20 +65,22 @@
 ComicNest/
 ├─ app/                    # 应用入口：MainActivity、导航、主题、DI 组装
 ├─ core/
-│  ├─ model/               # 纯数据模型（ComicKey、Comic、SortMode…）
-│  ├─ common/              # 工具（自然序比较、图片格式判定…）
-│  ├─ domain/              # 领域层：UseCase 与 Repository 接口
-│  ├─ data/                # 数据层：Room、DataStore、Repository 实现
-│  └─ ui/                  # 共享 UI 组件与主题（ComicCoverCard、FavoritesDialog…）
+│  ├─ model/               # 纯数据模型（ComicKey、Comic、VideoKey、VideoSummary…）
+│  ├─ common/              # 工具（自然序比较、图片/视频格式判定、时长格式化…）
+│  ├─ domain/              # 领域层：UseCase 与 Repository 接口（漫画 + 视频）
+│  ├─ data/                # 数据层：Room、DataStore、Repository 实现、视频迁移与缩略图回写
+│  └─ ui/                  # 共享 UI 组件与主题（ComicCoverCard、FavoritesDialog、FullNameDialog…）
 ├─ source/
 │  ├─ api/                 # 数据源接口（为未来在线源预留扩展点）
-│  └─ local/               # 本地目录扫描与取页实现
+│  ├─ local/               # 本地漫画目录扫描与取页实现
+│  └─ video/               # 本地视频扫描、元信息与中间帧缩略图生成/缓存
 ├─ feature/
 │  ├─ library/             # 书架首页
 │  ├─ reader/              # 阅读器（Webtoon / Pager）
 │  ├─ collection/          # 收藏夹
-│  └─ settings/            # 设置（库根管理、默认阅读方式、关于）
-├─ docs/                   # PRD / DESIGN 等设计文档
+│  ├─ video/               # 视频库网格与播放器（网格、抽屉、播放控制、重命名/删除）
+│  └─ settings/            # 设置（漫画/视频目录管理、默认阅读方式、关于）
+├─ docs/                   # PRD / DESIGN / DESIGN_v2 等设计文档
 ├─ gradle/                 # wrapper 与版本目录（libs.versions.toml）
 └─ keystore/               # 签名密钥（本地，已 gitignore，勿提交）
 ```
@@ -129,27 +148,37 @@ Release 采用**正式签名**：仅当根目录存在 `keystore.properties` 时
    ```powershell
    ./gradlew :app:assembleRelease
    ```
-   产物自动命名为：**`app/build/outputs/apk/release/ComicNest_<versionName>.apk`**（当前即 `ComicNest_1.1.0.apk`）。
+   产物自动命名为：**`app/build/outputs/apk/release/ComicNest_<versionName>.apk`**（当前即 `ComicNest_2.1.0.apk`）。
 
 ## 🔒 权限与隐私
 
-- 需要 **「所有文件访问权限」（`MANAGE_EXTERNAL_STORAGE`）**：这是「本地直读、免导入」体验的代价，授予后 App 可访问设备上的可读文件。
+- 需要 **「所有文件访问权限」（`MANAGE_EXTERNAL_STORAGE`）**：漫画库与视频库都基于绝对路径直读，这是「本地直读、免导入」体验的代价；授予后 App 可访问设备上的可读文件。
+- **视频删除**：删除视频时会尽力同步清理系统 MediaStore 中的对应索引（失败不影响本地删除），不收集任何数据。
 - **无网络权限**：ComicNest 不联网、不上报、不含广告与追踪，所有数据仅保存在本机。
 - 侧载自用场景建议使用；请在可信来源获取安装包。
 
 ## 📌 已知限制
 
 - 不支持压缩包（zip/cbz）、PDF、EPUB，仅读取散图目录。
-- Android 11+ 即便授予全部文件访问权限，`Android/data`、`Android/obb` 仍被系统屏蔽，无法作为漫画库根。
-- 允许不同库根下的同名漫画并存（内部以「库根 + 漫画名」构造唯一键）。
+- Android 11+ 即便授予全部文件访问权限，`Android/data`、`Android/obb` 仍被系统屏蔽，无法作为漫画/视频库根。
+- 视频目录只扫描所选目录的直接下一级文件（不递归）；嵌套子目录中的视频需要单独添加其父目录。
+- 视频播放依赖设备解码器，个别编码/封装可能无法播放（会提示错误码）；视频缩略图为中间帧 jpg，缓存上限 80MB（超出按最旧淘汰）。
+- 允许不同库根下的同名漫画/视频并存（内部以「库根 + 名称」构造唯一键）。
 
 ## 🔖 版本
 
-当前版本：**v1.1.0**（`versionName=1.1.0` / `versionCode=2`）。设置页「关于」中显示的版本号于运行时读取自安装包，自动跟随构建版本。
+当前版本：**v2.1.0**（`versionName=2.1.0` / `versionCode=5`）。设置页「关于」中显示的版本号于运行时读取自安装包，自动跟随构建版本。
+
+### 更新记录
+
+| 版本 | 主要变更 |
+|------|----------|
+| **v2.1.0** | 新增视频库与播放器：中间帧缩略图与缓存、继续观看、倍速切换、长按加速、重命名/删除；漫画与视频名称点击弹窗查看全名并复制；设置页漫画/视频目录管理 UI 统一；移除视频目录时同步清理缩略图与观看记录；修复播放页退出时画面残留 |
+| **v1.1.0** | 首个公开版本：本地漫画阅读、Webtoon/Pager 双模式、收藏夹、阅读进度记忆、书架搜索与分组 |
 
 ## 📄 许可与致谢
 
-- 本项目参考并移植了 [Mihon](https://github.com/mihonapp/mihon)（Apache License 2.0）的部分组件思路，并使用了 Coil、Room、Hilt、Jetpack Compose 等开源库，详见仓库根目录 `NOTICE`。
+- 本项目参考并移植了 [Mihon](https://github.com/mihonapp/mihon)（Apache License 2.0）的部分组件思路，并使用了 Coil、Room、Hilt、Jetpack Compose、Media3 (ExoPlayer) 等开源库，详见仓库根目录 `NOTICE`。
 - 本项目为个人学习与自用项目，按当前仓库许可条款分发；使用者请自行确保对本地漫画内容拥有合法使用权。
 
 ---
