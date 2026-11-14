@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
@@ -61,6 +62,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
 import com.comicnest.core.common.util.formatDuration
 import com.comicnest.core.model.VideoOrientation
+import com.comicnest.feature.video.ui.components.EpisodeDrawer
 import com.comicnest.feature.video.ui.components.PlayerControls
 import com.comicnest.feature.video.viewmodel.VideoPlayerUiState
 import com.comicnest.feature.video.viewmodel.VideoPlayerViewModel
@@ -88,9 +90,14 @@ fun VideoPlayerScreen(
     val playback by viewModel.playback.collectAsStateWithLifecycle()
     val hasNext by viewModel.hasNext.collectAsStateWithLifecycle()
     val orientationRequest by viewModel.orientationRequest.collectAsStateWithLifecycle()
+    val playlist by viewModel.playlist.collectAsStateWithLifecycle()
+    // 「选集」入口仅横屏提供（DESIGN v2 §12）
+    val isLandscape =
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     var controlsVisible by remember { mutableStateOf(true) }
     var hintText by remember { mutableStateOf<String?>(null) }
+    var episodeDrawerOpen by rememberSaveable { mutableStateOf(false) }
     // 已应用方向的视频 key：同一视频的 config change 不重复应用，不覆盖用户手动旋转；
     // 切换「下一个视频」时 key 变化，重新应用（DESIGN v2 §11.6 R6）
     var orientedKeyId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -108,7 +115,13 @@ fun VideoPlayerScreen(
         onBack()
     }
 
-    BackHandler { dismissPlayer() }
+    BackHandler {
+        if (episodeDrawerOpen) {
+            episodeDrawerOpen = false
+        } else {
+            dismissPlayer()
+        }
+    }
 
     // 退到后台：停播并强制落库一次（DESIGN v2 §3.8）
     DisposableEffect(lifecycleOwner) {
@@ -154,9 +167,14 @@ fun VideoPlayerScreen(
         orientedKeyId = request.keyId
     }
 
-    // 播放中 3s 后自动隐藏控件
-    LaunchedEffect(controlsVisible, playback.isPlaying) {
-        if (controlsVisible && playback.isPlaying) {
+    // 竖屏不提供选集入口：旋回竖屏时自动收起
+    LaunchedEffect(isLandscape) {
+        if (!isLandscape) episodeDrawerOpen = false
+    }
+
+    // 播放中 3s 后自动隐藏控件（选集抽屉打开时保持可见）
+    LaunchedEffect(controlsVisible, playback.isPlaying, episodeDrawerOpen) {
+        if (controlsVisible && playback.isPlaying && !episodeDrawerOpen) {
             delay(CONTROLS_AUTO_HIDE_MS)
             controlsVisible = false
         }
@@ -363,6 +381,7 @@ fun VideoPlayerScreen(
                         speed = playback.speed,
                         ended = playback.ended,
                         hasNext = hasNext,
+                        episodeButtonVisible = isLandscape,
                         onBack = dismissPlayer,
                         onTogglePlay = {
                             viewModel.onTogglePlay()
@@ -375,8 +394,22 @@ fun VideoPlayerScreen(
                             viewModel.onPlayNext()
                             controlsVisible = true
                         },
+                        onEpisodeClick = { episodeDrawerOpen = true },
                     )
                 }
+
+                // 选集抽屉：置于控制层之上，点遮罩关闭
+                EpisodeDrawer(
+                    visible = episodeDrawerOpen,
+                    playlist = playlist,
+                    onSelect = { summary ->
+                        episodeDrawerOpen = false
+                        controlsVisible = true
+                        viewModel.onPlayVideo(summary.key)
+                    },
+                    onThumbnailVisible = viewModel::onPlaylistThumbnailVisible,
+                    onDismiss = { episodeDrawerOpen = false },
+                )
             }
         }
     }

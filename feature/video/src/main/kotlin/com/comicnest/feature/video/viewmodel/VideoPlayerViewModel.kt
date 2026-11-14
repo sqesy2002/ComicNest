@@ -16,12 +16,14 @@ import com.comicnest.core.common.util.matchesAllKeywords
 import com.comicnest.core.common.util.parseSearchKeywords
 import com.comicnest.core.domain.repository.PreferencesRepository
 import com.comicnest.core.domain.repository.VideoRepository
+import com.comicnest.core.domain.usecase.video.EnsureVideoThumbnailUseCase
 import com.comicnest.core.domain.usecase.video.GetVideoLibraryUseCase
 import com.comicnest.core.domain.usecase.video.SaveVideoProgressUseCase
 import com.comicnest.core.model.VideoKey
 import com.comicnest.core.model.VideoOrientation
 import com.comicnest.core.model.VideoOrientationMode
 import com.comicnest.core.model.VideoSummary
+import com.comicnest.core.model.VideoThumbnailState
 import com.comicnest.core.model.resolveVideoOrientation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -35,9 +37,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /** 播放页装载状态。 */
 sealed interface VideoPlayerUiState {
@@ -72,11 +77,22 @@ data class PlaybackUiState(
 )
 
 /**
+ * 选集抽屉数据（DESIGN v2 §12）：当前搜索词 + 排序下的全部视频 + 当前视频下标，
+ * -1 表示当前视频不在列表中（如随机播放命中搜索范围外的视频）。
+ */
+data class PlayerPlaylist(
+    val items: List<VideoSummary>,
+    val currentIndex: Int,
+)
+
+/**
  * 播放器状态与进度编排（DESIGN v2 §3.8 / §11.4 / §11.6）：
  * - `ExoPlayer` 在 VM 内创建，退出页面时 `releasePlayer()` 立即释放，`onCleared` 兜底。
  * - 进度每 5s 节流落库；`onStop`/`onCleared` 强制写一次（≥10s 阈值在 UseCase 内）。
- * - 播放结束停在末帧，不自动连播；「下一个视频」按当前搜索词与排序的列表顺序切换。
+ * - 播放结束停在末帧，不自动连播；「下一个视频」与「选集」均按当前搜索词与排序的列表顺序切换。
  * - 进入时按偏好（竖屏/横屏/根据比例）确定方向，AUTO 仅在装载阶段读一次宽高。
+ * - 选集抽屉数据（当前搜索词 + 排序下的全部视频，与视频页列表同源同序）随库 Flow 持续刷新，
+ *   缩略图按需生成。
  */
 @HiltViewModel
 class VideoPlayerViewModel @Inject constructor(
@@ -85,6 +101,7 @@ class VideoPlayerViewModel @Inject constructor(
     private val getVideoLibrary: GetVideoLibraryUseCase,
     private val preferencesRepository: PreferencesRepository,
     private val saveProgress: SaveVideoProgressUseCase,
+    private val ensureThumbnail: EnsureVideoThumbnailUseCase,
     @ApplicationContext context: Context,
 ) : ViewModel() {
 
@@ -95,7 +112,14 @@ class VideoPlayerViewModel @Inject constructor(
     private val query: String = savedStateHandle.get<String>(ARG_QUERY).orEmpty()
 
     private var currentKey: VideoKey? = null
-    private var queue: List<VideoSummary> = emptyList()
+
+    /** 当前搜索词 + 排序下的完整列表；由 [observeQueue] 随库变化持续刷新。 */
+    private var fullQueue: List<VideoSummary> = emptyList()
+
+    /** 未经搜索过滤的全库列表（随机播放等场景下当前视频不在搜索结果内时，选集回退到全库定位）。 */
+    private var allVideos: List<VideoSummary> = emptyList()
+
+    private val keywords: List<String> = parseSearchKeywords(query)
 
     /** 是否已释放播放器（释放后禁止再读写 player，避免异常）。 */
     private var released = false
@@ -113,6 +137,14 @@ class VideoPlayerViewModel @Inject constructor(
     /** 当前视频应使用的方向请求；null 表示尚未确定（装载阶段）。 */
     private val _orientationRequest = MutableStateFlow<VideoOrientationRequest?>(null)
     val orientationRequest: StateFlow<VideoOrientationRequest?> = _orientationRequest.asStateFlow()
+
+    /** 选集抽屉：当前搜索词 + 排序下的全部视频。 */
+    private val _playlist = MutableStateFlow(PlayerPlaylist(emptyList(), -1))
+    val playlist: StateFlow<PlayerPlaylist> = _playlist.asStateFlow()
+
+    /** 选集缩略图队列：最多 3 个并发，已入队的不重复请求。 */
+    private val thumbGate = Semaphore(THUMB_CONCURRENCY)
+    private val thumbRequested = mutableSetOf<String>()
 
     /** 供 `AndroidView(PlayerView)` 绑定；页面退出时通过 [releasePlayer] 立即释放。 */
     val player: ExoPlayer = ExoPlayer.Builder(context)
@@ -162,6 +194,7 @@ class VideoPlayerViewModel @Inject constructor(
     init {
         player.addListener(listener)
         startTicker()
+        observeQueue()
         val key = initialKey
         if (key == null) {
             _uiState.value = VideoPlayerUiState.Error("视频参数无效")
@@ -191,7 +224,8 @@ class VideoPlayerViewModel @Inject constructor(
             player.prepare()
             if (start > 0L) player.seekTo(start)
             player.playWhenReady = true
-            refreshQueue(key)
+            refreshPlaylist()
+            _hasNext.value = pickNext(key) != null
         }
     }
 
@@ -206,29 +240,65 @@ class VideoPlayerViewModel @Inject constructor(
         return resolveVideoOrientation(mode, dimensions)
     }
 
-    /** 用当前的搜索词 + 排序复算播放队列，并刷新「下一个」可用性。 */
-    private suspend fun refreshQueue(key: VideoKey) {
-        queue = runCatching {
-            val keywords = parseSearchKeywords(query)
-            val data = getVideoLibrary().first()
-            data.videos.filter { matchesAllKeywords(it.key.fileName, keywords) }
-        }.getOrDefault(emptyList())
-        _hasNext.value = pickNext(key) != null
+    /** 持续跟踪视频库（缩略图回写、删除、重命名、排序变化），同步选集窗口与「下一个」可用性。 */
+    private fun observeQueue() {
+        viewModelScope.launch {
+            getVideoLibrary()
+                .catch { t -> AppLog.e("VideoPlayer", "读取视频队列失败", t) }
+                .collect { data ->
+                    allVideos = data.videos
+                    fullQueue = data.videos.filter {
+                        matchesAllKeywords(it.key.fileName, keywords)
+                    }
+                    refreshPlaylist()
+                    _hasNext.value = pickNext(currentKey) != null
+                }
+        }
+    }
+
+    private fun refreshPlaylist() {
+        val key = currentKey
+        // 当前视频不在搜索结果内（如随机播放命中库外视频）时回退到全库，保证能定位到当前项
+        val notInQueue = key != null && fullQueue.none { it.key == key }
+        val source = if (notInQueue && allVideos.isNotEmpty()) allVideos else fullQueue
+        _playlist.value = buildPlaylist(source, key)
     }
 
     /** 队列中当前视频之后的第一个仍存在的文件（最多跳过 [MAX_SKIP_IN_QUEUE] 个失效项）。 */
     private fun pickNext(current: VideoKey?): VideoSummary? =
-        nextVideoAfter(queue, current) { File(it.absPath).isFile }
+        nextVideoAfter(fullQueue, current) { File(it.absPath).isFile }
 
     /** 「下一个视频」：先落库当前进度，再在同一 VM 内切换（不重建页面）。 */
     fun onPlayNext() {
         if (released) return
         val next = pickNext(currentKey) ?: return
+        switchTo(next.key)
+    }
+
+    /** 选集抽屉选择视频：当前项不响应，其余同样在页内切换。 */
+    fun onPlayVideo(key: VideoKey) {
+        if (released || key == currentKey) return
+        switchTo(key)
+    }
+
+    /** 选集可见项触发缩略图（与网格共用 UseCase 去重，最多 [THUMB_CONCURRENCY] 并发）。 */
+    fun onPlaylistThumbnailVisible(summary: VideoSummary) {
+        if (summary.thumbState != VideoThumbnailState.PENDING) return
+        if (!thumbRequested.add(summary.key.id)) return
+        viewModelScope.launch {
+            thumbGate.withPermit {
+                runCatching { ensureThumbnail(summary.key) }
+            }
+        }
+    }
+
+    /** 页内切换视频：先落库当前进度、退出临时加速，再装载新视频。 */
+    private fun switchTo(key: VideoKey) {
         onBoostEnd()
         persistProgress(force = true)
         player.stop()
         _playback.update { it.copy(ended = false, boostSpeed = null) }
-        open(next.key)
+        open(key)
     }
 
     /** 播放中每 500ms 同步一次位置，并按 5s 窗口节流落库。 */
@@ -387,6 +457,21 @@ internal fun nextVideoAfter(
 
 /** 「下一个视频」最多跳过的失效文件数。 */
 private const val MAX_SKIP_IN_QUEUE = 3
+
+/** 选集缩略图并发数（与列表页一致）。 */
+private const val THUMB_CONCURRENCY = 3
+
+/**
+ * 构建选集列表（DESIGN v2 §12）：完整保留传入的列表（与视频页同源同序），
+ * 只额外定位当前视频下标；不在列表内时 [PlayerPlaylist.currentIndex] 为 -1。
+ */
+internal fun buildPlaylist(
+    queue: List<VideoSummary>,
+    current: VideoKey?,
+): PlayerPlaylist {
+    val index = current?.let { key -> queue.indexOfFirst { it.key == key } } ?: -1
+    return PlayerPlaylist(items = queue, currentIndex = index)
+}
 
 /**
  * 长按加速倍率：当前设定低于 2x 时用 2x，否则用 3x，保证长按一定比当前快。

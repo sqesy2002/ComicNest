@@ -51,9 +51,9 @@ import com.comicnest.core.common.util.formatDuration
 import com.comicnest.core.ui.components.FullNameDialog
 
 /**
- * 播放页控制层（DESIGN v2 §9.5 / §11.4 R4）：顶栏返回 + 文件名；底部三层：
- * A 左上时间「8:21 / 23:05」；B 惯用风格细进度条；C 左下播放/暂停 + 下一个视频，右下倍速 + 旋转。
- * 只渲染状态与上报事件，不含业务判断。
+ * 播放页控制层（DESIGN v2 §9.5 / §11.4 R4 / §12）：顶栏返回 + 文件名；底部三层：
+ * A 左上时间「8:21 / 23:05」；B 惯用风格细进度条；C 左下播放/暂停 + 下一个视频，
+ * 右下选集（仅横屏）+ 倍速 + 旋转。只渲染状态与上报事件，不含业务判断。
  */
 @Composable
 fun PlayerControls(
@@ -64,12 +64,14 @@ fun PlayerControls(
     speed: Float,
     ended: Boolean,
     hasNext: Boolean,
+    episodeButtonVisible: Boolean,
     onBack: () -> Unit,
     onTogglePlay: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onCycleSpeed: () -> Unit,
     onToggleOrientation: () -> Unit,
     onPlayNext: () -> Unit,
+    onEpisodeClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 点击顶栏标题：弹窗展示完整文件名（可滚动）并支持一键复制
@@ -181,6 +183,12 @@ fun PlayerControls(
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 「选集」仅横屏可见（DESIGN v2 §12）
+                    if (episodeButtonVisible) {
+                        TextButton(onClick = onEpisodeClick) {
+                            Text("选集", color = Color.White)
+                        }
+                    }
                     TextButton(onClick = onCycleSpeed) {
                         Text(speedLabel(speed), color = Color.White)
                     }

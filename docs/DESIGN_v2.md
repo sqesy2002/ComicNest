@@ -1202,4 +1202,51 @@ internal fun orientationRequest(mode: VideoOrientationMode, dims: VideoDimension
 
 ---
 
-*（DESIGN v2 完。实施时若与 `docs/demand_v2.txt` 或本文 §0 的 V1~V14 冲突，以 §0 为准；与 v1 `DESIGN.md` 冲突时，漫画侧以 v1 为准，视频侧以本文为准；v2.2 迭代以 §11 为准。）*
+## 12. v2.3 迭代设计：播放器「选集」抽屉
+
+> 入口只在横屏出现；抽屉内容与「下一个视频」同源（当前搜索词 + 当前排序），不新增播放列表实体。
+
+### 12.1 决策清单（D23~D28）
+
+| 编号 | 需求 | 决策结论 |
+|------|------|----------|
+| D23 | 入口 | 底栏最下一行（C 层）右侧、倍速按钮左侧新增「选集」文本按钮（位于倍速左侧）；仅横屏渲染，竖屏不占位 |
+| D24 | 抽屉形态 | 右侧滑入 300dp 深色面板 + 50% 黑色遮罩；点遮罩关闭；返回键先关抽屉；转回竖屏自动关闭 |
+| D25 | 内容 | 单列 `LazyColumn`，完整展示当前搜索词 + 排序下的全部视频（与视频页列表同源同序，不截断）；每项 96×54dp 缩略图 + 名称（≤ 2 行）；当前项名称蓝色 `#5AA9FF`、加粗一级且不可点击；打开时自动滚到当前项 |
+| D26 | 数据 | `PlayerPlaylist(items, currentIndex)` 由 VM 在视频库 Flow 上复算（`parseSearchKeywords` + 排序），随缩略图回写/删除/重命名自动刷新；当前视频不在列表内时 `currentIndex = -1` |
+| D27 | 缩略图 | 复用 `EnsureVideoThumbnailUseCase`，抽屉内可见项触发；3 并发 + 按 key 去重，DB 回写后由库流驱动刷新 |
+| D28 | 版本 | `versionName = 2.3.1`、`versionCode = 8`；Release 产物 `ComicNest_2.3.1.apk` |
+
+### 12.2 交互与状态
+
+- 打开：点「选集」→ `episodeDrawerOpen = true`，控制层保持可见（抽屉打开期间不自动隐藏）。
+- 关闭：点遮罩 / 返回键 / 转入竖屏；选择条目后先关闭再切换。
+- 选择：`onPlayVideo(key)` → 当前进度强制落库 → `player.stop()` → `open(key)`（同一 VM，页面不重建）；方向按 §11.6 规则重新下发请求。
+- 当前项：名称蓝色、不可点击（点击不关闭抽屉）。
+
+### 12.3 代码落点
+
+| 层 | 文件 | 内容 |
+|----|------|------|
+| VM | `VideoPlayerViewModel.kt` | `PlayerPlaylist`、`playlist` StateFlow、`observeQueue()`、`refreshPlaylist()`、`onPlayVideo()`、`onPlaylistThumbnailVisible()`、纯函数 `buildPlaylist()` |
+| UI | `ui/components/EpisodeDrawer.kt` | 遮罩 + 滑入面板 + 单列列表（缩略图/名称/当前项蓝色） |
+| UI | `PlayerControls.kt` | 新增 `episodeButtonVisible` / `onEpisodeClick`，「选集」位于倍速左侧 |
+| UI | `VideoPlayerScreen.kt` | `LocalConfiguration` 判横屏、抽屉状态、返回键分级、抽屉叠于控制层之上 |
+| 测试 | `PlayerPlaylistTest.kt` | 全量保留并定位下标/首位与末位/不在列表/列表实例复用/空列表 5 例 |
+
+### 12.4 边界
+
+- 缩略图仍为 PENDING 时显示加载指示；FAILED 显示断图占位，不重试。
+- 队列来自内存计算，文件被删除后由库流刷新（列表自然收缩）；`readDimensions` 只在 AUTO 模式触发，抽屉本身不额外读元数据。
+- 不做：抽屉内搜索、拖动排序、显示进度百分比、长按操作（重命名/删除仍走列表页）。
+
+### 12.5 v2.3.1 修正：选集数量与视频页不一致
+
+- 现象：空搜索时抽屉条目数少于全库（全库 > 41 时只显示 41）；搜索命中 30 条时抽屉只显示 23 条（当前项靠前，窗口右边界被截断）。
+- 根因：抽屉曾按「当前项前后各 20 个」截取窗口，而非使用完整列表。
+- 修正：`buildPlaylist()` 完整保留当前搜索词 + 排序下的列表，只额外定位当前下标，数量与视频页严格一致；`LazyColumn` 惰性渲染，缩略图仍按可见项按需生成。
+- 版本：`2.3.1` / `versionCode 8`（D28 同步）。
+
+---
+
+*（DESIGN v2 完。实施时若与 `docs/demand_v2.txt` 或本文 §0 的 V1~V14 冲突，以 §0 为准；与 v1 `DESIGN.md` 冲突时，漫画侧以 v1 为准，视频侧以本文为准；v2.2 迭代以 §11 为准，v2.3 迭代以 §12 为准。）*
