@@ -13,6 +13,7 @@ import com.comicnest.core.data.mapper.toEntity
 import com.comicnest.core.data.mapper.toModel
 import com.comicnest.core.domain.repository.VideoRepository
 import com.comicnest.core.model.RecentVideo
+import com.comicnest.core.model.VideoDimensions
 import com.comicnest.core.model.VideoKey
 import com.comicnest.core.model.VideoProgress
 import com.comicnest.core.model.VideoRoot
@@ -24,6 +25,7 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -199,15 +201,16 @@ class VideoRepositoryImpl @Inject constructor(
             val entity = videoDao.getById(key.id) ?: error("视频不存在：${key.fileName}")
             val file = File(entity.absPath)
             if (file.exists()) {
-                // 步骤 2：尽力清 MediaStore（失败不影响后续）
-                source.purgeMediaStore(entity.absPath)
-                // 步骤 3：删文件，失败则完全不动 DB（列表里仍能看到该视频）
-                val deleted = runCatching { file.delete() }.getOrDefault(false)
-                if (!deleted || file.exists()) {
-                    error("删除失败，文件可能被占用或目录只读")
+                // 步骤 2：等待同进程正在读该文件的读取器结束（DESIGN v2 §11.2 R2）
+                source.awaitFileIdle(entity.absPath, DELETE_IDLE_TIMEOUT_MS)
+                // 步骤 3：删文件（短重试覆盖句柄延迟释放），失败则完全不动 DB
+                if (!deleteWithRetry(file)) {
+                    error("删除失败，文件仍被系统占用，请稍后重试")
                 }
+                // 步骤 4：文件已删，只清 MediaStore 索引（不再触发扫描重新打开文件）
+                source.purgeMediaStore(entity.absPath)
             }
-            // 步骤 4：清缓存与记录
+            // 步骤 5：清缓存与记录
             source.deleteThumbnail(entity.thumbPath)
             progressDao.deleteById(key.id)
             videoDao.deleteById(key.id)
@@ -217,6 +220,25 @@ class VideoRepositoryImpl @Inject constructor(
                 refresh()
             }
         }
+    }
+
+    /** 删除文件：3 次短重试，覆盖播放器/媒体库句柄释放延迟；成功或文件消失即返回 true。 */
+    private suspend fun deleteWithRetry(file: File): Boolean {
+        repeat(DELETE_ATTEMPTS) { attempt ->
+            if (runCatching { file.delete() }.getOrDefault(false) || !file.exists()) return true
+            DELETE_RETRY_DELAYS_MS.getOrNull(attempt)?.let { delay(it) }
+        }
+        return false
+    }
+
+    override suspend fun readDimensions(key: VideoKey): Result<VideoDimensions> = runCatchingIo {
+        val entity = videoDao.getById(key.id) ?: error("视频不存在：${key.fileName}")
+        val meta = source.readMeta(entity.absPath).getOrThrow()
+        VideoDimensions(
+            width = meta.width,
+            height = meta.height,
+            rotationDegrees = meta.rotationDegrees,
+        )
     }
 
     override suspend fun renameVideo(key: VideoKey, newFileName: String): Result<VideoKey> =
@@ -306,6 +328,11 @@ class VideoRepositoryImpl @Inject constructor(
     companion object {
         private const val TAG = "VideoRepository"
         const val LRU_KEEP = 3
+
+        /** 删除前的读取器等待上限（DESIGN v2 §11.2 R2）。 */
+        private const val DELETE_IDLE_TIMEOUT_MS = 1_500L
+        private const val DELETE_ATTEMPTS = 3
+        private val DELETE_RETRY_DELAYS_MS = longArrayOf(60L, 160L)
     }
 }
 

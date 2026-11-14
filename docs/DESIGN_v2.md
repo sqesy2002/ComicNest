@@ -1,6 +1,7 @@
 # ComicNest 系统设计文档（DESIGN v2：视频库与播放器）
 
 > 版本：v2.0（新增“视频”一级入口、视频库目录、视频网格与分组抽屉、内置播放器、最近观看、本地删除）
+> 迭代：**v2.2**（2026-11，6 项体验迭代：多关键词搜索 / 删除一次成功 / 移除“继续观看”UI / 播放器底部三层控制层 / 设置文案去英文 / 默认视频朝向），设计与代码落点见 **§11**；与 §0~§10 冲突时以 §11 为准。
 > 上游依据：`docs/demand_v2.txt` + 本轮已确认决策 **V1~V14**（见 §0）
 > 与 v1 的关系：`docs/DESIGN.md`（v0.3）所描述的漫画侧设计**全部保持不变**。本文档只做增量；唯一共通改动是 **Room 版本 1→2 迁移**与**底部导航由 3 项增至 4 项**。
 > 目标读者：开发实施者。本文档做到“决策完备”，实施者无需再做架构级决策。
@@ -14,12 +15,12 @@
 |------|------|------|
 | V1 | 底部导航 | 书架 / **视频** / 收藏 / 设置（4 项，视频位于书架与收藏之间） |
 | V2 | 视频库目录 | 设置页新增“视频库目录”分区，位于“阅读”与“关于”之间；支持多目录；**只取目录直接下一级的视频文件**，无更深子目录 |
-| V3 | 视频页形态 | 与书架同构：顶栏（☰ + 标题 + 排序/随机/刷新）+ 左侧抽屉（顶部搜索框 + 每 30 个一组的分组跳转）+ 网格；**无收藏功能** |
+| V3 | 视频页形态 | 与书架同构：顶栏（☰ + 标题 + 排序/随机/刷新）+ 左侧抽屉（顶部搜索框 + 每 50 个一组的分组跳转，v2.2 由 30 调为 50，见 §11 R3）+ 网格；**无收藏功能** |
 | V4 | 缩略图 | 取**视频中间帧**；可见项懒生成 + 列表静止后补齐；缓存在 App 私有目录 |
 | V5 | 卡片样式 | 16:9 缩略图 + 文件名单行 + 右下角时长角标；`GridCells.Adaptive(minSize = 160.dp)`（手机约 2 列） |
 | V6 | 播放器内核 | Media3 ExoPlayer `1.5.1`（`media3-exoplayer` + `media3-ui`）；`AndroidView` 包 `PlayerView`（关内置控制器）+ 自绘 Compose 控制层；**不使用** `media3-ui-compose` 实验 API |
-| V7 | 播放器功能 | 拖动进度条、前进/后退 15s、0.5/1.0/1.5/2.0 倍速、横竖屏切换、轻点显隐控件；**并加手势**：双击暂停/继续、左右滑快进/回退、上下滑调亮度（左半屏）/音量（右半屏）；播放结束停在末帧 |
-| V8 | 观看记录 | 最近 **3** 条（第 4 条覆盖最早），持久化 Room，记录播放位置；单次播放 ≥10s 才写入；视频页顶部“继续观看”最多 3 张 16:9 卡片，点击直接续播 |
+| V7 | 播放器功能 | 拖动进度条、前进/后退 15s（**v2.2 移除 ±15s 按钮并重构底栏，见 §11 R4**）、0.5/1.0/1.5/2.0 倍速、横竖屏切换、轻点显隐控件；**并加手势**：双击暂停/继续、左右滑快进/回退、上下滑调亮度（左半屏）/音量（右半屏）；播放结束停在末帧 |
+| V8 | 观看记录 | 最近 **3** 条（第 4 条覆盖最早），持久化 Room，记录播放位置；单次播放 ≥10s 才写入；~~视频页顶部“继续观看”最多 3 张 16:9 卡片~~（**v2.2 起 UI 不再展示，仅保留数据与 LRU=3，见 §11 R3**） |
 | V9 | 格式 | 白名单 `mp4/m4v/mkv/webm/ts/mov/3gp`；白名单外**不入库、不展示**（避免点开必失败） |
 | V10 | 删除 | 长按底部菜单（播放 / 删除）→ 二次确认（含文件名 + “不可恢复”）→ 清 MediaStore 记录（失败忽略）→ `File.delete()` 判返回值 → 清缩略图与观看记录 → 列表即时移除 |
 | V11 | 目录关系 | 视频目录与漫画目录**独立存表**、允许同一路径；互不影响（不污染漫画 `refresh` 整表重建） |
@@ -589,7 +590,7 @@ ComicNest/
 - 卡片点击→播放；**长按**→ 底部动作菜单（播放 / 删除）—— 视频无收藏动作（V14）。
 - 状态：`Empty(firstRun=true)` → 居中引导“添加视频目录”（跳设置页或直接弹目录选择器）；`Empty(firstRun=false)` → “该目录下暂无视频”；`NoResult` → “无匹配视频”；`Error` → 重试。
 
-### 9.4 左侧抽屉（搜索 + 每 30 个一组）
+### 9.4 左侧抽屉（搜索 + 每 50 个一组）
 
 ```
 ┌────────────────────────────┐
@@ -604,11 +605,13 @@ ComicNest/
 └────────────────────────────┘
 ```
 
-- 搜索：`OutlinedTextField`，前导搜索图标、尾部✕，`singleLine`，圆角 24dp；输入即内存过滤（`fileName.contains(q, ignoreCase = true)`），抽屉保持展开。
-- 分组：`VIDEO_GROUP_SIZE = 30`，按**全库总数**划分且与搜索无关；≤30 时显示“视频不足 30 个，无需分组”；点组先清空搜索再 `scrollToItem`。
-- 当前组高亮：`firstVisibleItemIndex / 30` 派生（仅在搜索为空时高亮，与 v1 §10.3 一致）。
+- 搜索：`OutlinedTextField`，前导搜索图标、尾部✕，`singleLine`，圆角 24dp；输入即内存过滤（v2.2 起为“空格分隔多关键词 AND 匹配”，见 §11 R1），抽屉保持展开。
+- 分组：`VIDEO_GROUP_SIZE = 50`，按**全库总数**划分且与搜索无关；≤50 时显示“视频不足 50 个，无需分组”；点组先清空搜索再 `scrollToItem`。
+- 当前组高亮：`firstVisibleItemIndex / 50` 派生（仅在搜索为空时高亮，与 v1 §10.3 一致）。
 
 ### 9.5 播放页（VideoPlayerScreen）
+
+> **v2.2 起底部控制层改为三层结构（时间 / 细进度条 / 按钮）并移除 ±15s，下方示意图仅作历史参考，最新规格以 §11 R4 为准。**
 
 ```
 横屏（推荐方向）
@@ -648,6 +651,8 @@ ComicNest/
 ```
 
 ### 9.7 设置页（新增分区）
+
+> **v2.2 调整**：分区顺序为 漫画库目录 → 漫画阅读方式 → 视频库目录 → **视频播放方式（新增）** → 关于；阅读方式选项去掉英文、新增“默认视频朝向”（见 §11 R5/R6）。
 
 ```
 ┌──────────────────────────────────────────┐
@@ -736,4 +741,465 @@ ComicNest/
 
 ---
 
-*（DESIGN v2 完。实施时若与 `docs/demand_v2.txt` 或本文 §0 的 V1~V14 冲突，以 §0 为准；与 v1 `DESIGN.md` 冲突时，漫画侧以 v1 为准，视频侧以本文为准。）*
+## 11. v2.2 迭代设计（R1~R6）
+
+> 本节覆盖 2026-11 的 6 项体验迭代（R1~R6）。每项按“现状 → 目标 → 规则 → 代码落点 → 边界 → 测试”给出，实施者无需再做架构级决策。与 §0~§10 冲突时以本节为准。
+
+### 11.0 迭代决策清单（D15~D22）
+
+| 编号 | 对应需求 | 决策结论 |
+|------|----------|----------|
+| D15 | R1 搜索 | 以空白字符（半角空格 / 制表符 / 换行 / 全角空格 U+3000）分词，多关键词 **AND** 匹配、顺序无关、大小写不敏感；单关键词保持现行为 |
+| D16 | R2 删除 | **先删文件、后清索引**；删除路径不再触发媒体扫描；删除前等待该文件的读取任务结束；`delete()` 短重试 3 次；退出播放页立即 `release()` 播放器 |
+| D17 | R3 继续观看 | 数据层（表、LRU=3、≥10s 阈值、`getProgress` 续播）**全部保留**；仅移除视频页 UI，不做“可开关” |
+| D18 | R4 播放器底栏 | 三层：① 左上时间 `8:21/23:05`；② 细进度条（3dp 轨道、5dp 圆点光标，拖动时 4.5dp/7dp）；③ 左（播放/暂停 + 下一个）· 右（倍速 + 旋转）；**移除 ±15s** |
+| D19 | R4 下一个视频 | 顺序 = 当前搜索词 + 当前排序得到的列表；列表末项时按钮禁用（图标 35% 不透明）；切换在页内完成，不新建页面 |
+| D20 | R5 设置文案 | 阅读方式选项去英文：`下拉式`、`左右翻页` |
+| D21 | R6 默认视频朝向 | 新增偏好 `横屏 / 竖屏（默认）/ 根据视频比例`；进入播放页及切换视频时按当前视频应用，同一视频内不覆盖手动旋转；退出恢复 `UNSPECIFIED` |
+| D22 | 版本 | `versionName = 2.2.0`、`versionCode = 6`；Release 产物 `ComicNest_2.2.0.apk` |
+
+---
+
+### 11.1 R1：书架 / 视频搜索支持多关键词（空格分隔）
+
+#### 现状与问题
+
+两处过滤均为“整串 `contains`”，空格被当成普通字符：
+
+| 位置 | 代码 |
+|------|------|
+| 书架 | `feature/library/.../LibraryViewModel.kt`：`it.key.displayName.contains(keyword, ignoreCase = true)` |
+| 视频 | `feature/video/.../VideoLibraryViewModel.kt`：`it.key.fileName.contains(keyword, ignoreCase = true)` |
+
+因此输入 `胡桃 芙宁娜` 只能匹配文件名里**连续出现**“胡桃 芙宁娜”的名称，无法匹配 `xx胡桃xx芙宁娜`。
+
+#### 目标规则（D15）
+
+| 输入 | 解析结果 | 命中条件 |
+|------|----------|----------|
+| `胡桃` | `[胡桃]` | 名称包含“胡桃” |
+| `胡桃 芙宁娜` | `[胡桃, 芙宁娜]` | 名称**同时**包含两者（顺序任意） |
+| `  胡桃　　芙宁娜  ` | `[胡桃, 芙宁娜]` | 首尾空白丢弃；连续空白、全角空格、制表符都视为分隔符 |
+| `胡桃  ` | `[胡桃]` | 与单关键词一致 |
+| `   `（全空白） | `[]` | 等价于无搜索，显示全部（不进入 `NoResult`） |
+| `胡桃 芙宁娜`（名称只含“胡桃”） | `[胡桃, 芙宁娜]` | **不命中**（AND 语义） |
+
+- 匹配对象：漫画 `ComicKey.displayName`（不含路径）；视频 `VideoKey.fileName`（含扩展名，与现状一致）。
+- 大小写：`ignoreCase = true`（保持现状）。
+- 关键词数量上限：取前 **8** 个 token（防止粘贴长文本造成无效遍历），超出部分忽略。
+
+#### 实现（新增共享纯函数）
+
+新增 `core/common/src/main/kotlin/com/comicnest/core/common/util/SearchKeywords.kt`：
+
+```kotlin
+/** 分隔符：任意空白 + 全角空格（\u3000）。 */
+private val KEYWORD_SEPARATOR = Regex("[\\s\\u3000]+")
+
+/** 搜索词 → 关键词列表；空白串返回空列表（=不过滤）。 */
+fun parseSearchKeywords(query: String): List<String> =
+    query.trim()
+        .split(KEYWORD_SEPARATOR)
+        .filter { it.isNotEmpty() }
+        .take(MAX_KEYWORDS)
+
+/** 文本是否同时包含全部关键词（AND、顺序无关、忽略大小写）。 */
+fun matchesAllKeywords(text: String, keywords: List<String>): Boolean =
+    keywords.isEmpty() || keywords.all { text.contains(it, ignoreCase = true) }
+
+private const val MAX_KEYWORDS = 8
+```
+
+统一改为：
+
+```kotlin
+// LibraryViewModel.render
+val keywords = parseSearchKeywords(query)
+val filtered = data.comics.filter { matchesAllKeywords(it.key.displayName, keywords) }
+
+// VideoLibraryViewModel.render
+val keywords = parseSearchKeywords(query)
+val filtered = data.videos.filter { matchesAllKeywords(it.key.fileName, keywords) }
+```
+
+- `NoResult(query = ...)` 继续传 `query.trim()` 原文，提示语保持「没有找到匹配「胡桃 芙宁娜」的漫画」。
+- 搜索框 placeholder 改为：书架 `搜索漫画名`、视频抽屉 `搜索视频文件名`（不附带括号说明文字）。
+- 不做拼音/首字母/模糊纠错（不属于本次范围）。
+
+#### 测试（`core:common` 单测，新增 `SearchKeywordsTest`）
+
+1. `胡桃 芙宁娜` 命中 `xx胡桃xx芙宁娜.mp4`，且命中 `芙宁娜-胡桃.jpg`（顺序无关）；
+2. 仅含单个关键词时不命中（AND）；
+3. 连续空格 / 制表符 / 全角空格混合分隔解析为同一列表；
+4. 首尾空白与全空白输入；
+5. 大小写混合（`KaMi` 命中 `kamisato`）；
+6. 超过 8 个关键词只取前 8 个。
+
+---
+
+### 11.2 R2：删除视频“第一次失败、第二次成功”的修复
+
+#### 现象
+
+只打开 ComicNest（无其他 App 占用），首次确认删除提示“文件可能被占用”，再次点击删除即成功。
+
+#### 现状链路（`VideoRepositoryImpl.deleteVideo` + `LocalVideoSource`）
+
+```
+确认删除
+  └─ source.purgeMediaStore(absPath)        // ① 先清 MediaStore
+       ├─ resolver.delete(_data = ?)          //   有索引：删索引（MediaProvider 可能打开文件）
+       └─ 0 行：MediaScannerConnection.scanFile(absPath)  //   无索引：异步扫描 → 打开文件读头
+  └─ File.delete()                          // ② 紧接着删文件 → 撞上 ① 的句柄 → false
+  └─ 失败：error(“删除失败，文件可能被占用或目录只读”)，DB 完全不动
+```
+
+#### 根因分析（按影响排序）
+
+1. **P0 — 自伤式占用**：绝大多数用户目录下的视频**没有 MediaStore 索引**，因此每次删除都会走降级分支 `MediaScannerConnection.scanFile`。该调用是异步的，媒体扫描器会**打开文件读取头部元数据**，回调未等待；紧随其后的 `File.delete()` 必然撞上这个短暂句柄。第二次点击时上一次扫描早已结束，于是成功——与“永远第二次成功”的现象完全一致。
+2. **P1 — 播放器释放滞后**：`ExoPlayer.release()` 只在 `VideoPlayerViewModel.onCleared()` 调用，且释放动作在其内部播放线程异步执行；退出播放页后立即删除该视频，可能仍有 fd 未归还。
+3. **P2 — 缩略图/元数据读取**：`MediaMetadataRetriever`（缩略图生成、`readMeta`）在读同一文件时持有 fd（`Semaphore(3)` 允许 3 路并发）。
+4. **P3 — 系统侧延迟**：媒体扫描服务、文件索引等可能在数秒内释放；这部分只能靠短重试兜底。
+
+#### 修复设计（D16）
+
+**① 顺序反转：先删文件，成功后才清索引**
+
+```kotlin
+override suspend fun deleteVideo(key: VideoKey): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatchingIo {
+        val entity = videoDao.getById(key.id) ?: error("视频不存在：${key.fileName}")
+        // 1) 等待该文件的读取任务（缩略图/元数据）结束，最多 1.5s
+        source.awaitFileIdle(entity.absPath, 1_500)
+        // 2) 先删文件（带短重试）；失败则不动 MediaStore、不动 DB
+        val file = File(entity.absPath)
+        if (file.exists() && !deleteWithRetry(file)) {
+            error("删除失败，文件仍被系统占用，请稍后重试")
+        }
+        // 3) 文件已不存在：只删索引，绝不触发扫描
+        source.purgeMediaStore(entity.absPath)
+        // 4) 清缩略图 + 进度行 + 缓存行（原逻辑不变）
+        source.deleteThumbnail(entity.thumbPath)
+        progressDao.deleteById(key.id)
+        videoDao.deleteById(key.id)
+    }
+}
+
+private suspend fun deleteWithRetry(file: File): Boolean {
+    repeat(DELETE_ATTEMPTS) { attempt ->
+        if (runCatching { file.delete() }.getOrDefault(false)) return true
+        if (!file.exists()) return true            // 已被系统/MediaStore 删除也算成功
+        if (attempt < DELETE_ATTEMPTS - 1) delay(DELETE_RETRY_DELAYS_MS[attempt])
+    }
+    return false
+}
+// DELETE_ATTEMPTS = 3；DELETE_RETRY_DELAYS_MS = longArrayOf(50, 150)
+```
+
+**② `purgeMediaStore` 只删索引，不再触发扫描**（`LocalVideoSource`）
+
+```kotlin
+override suspend fun purgeMediaStore(absPath: String) = withContext(Dispatchers.IO) {
+    // 文件此时已被删除；只删索引行，不调用 MediaScannerConnection.scanFile
+    // （scanFile 会重新打开文件读头，正是“第一次删不掉”的直接原因）
+    runCatching {
+        context.contentResolver.delete(
+            MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL),
+            "${MediaStore.MediaColumns.DATA} = ?",
+            arrayOf(absPath),
+        )
+    }
+    Unit
+}
+```
+
+> 重命名路径的 `purgeMediaStore(oldPath)` 不受影响（文件已改名，不存在“删除前扫描”问题）；但同样不再需要 `scanFile(oldPath)`。
+
+**③ 新增读取任务互斥接口**（`VideoSource`，默认实现为空，避免影响测试 Fake）
+
+```kotlin
+/** 等待对该路径的读取任务（缩略图/元数据）全部结束，最多等 [timeoutMs]。 */
+suspend fun awaitFileIdle(absPath: String, timeoutMs: Long) = Unit
+```
+
+`LocalVideoSource` 用 `ConcurrentHashMap<String, Int>` 记录 in-flight 计数：`generateThumbnail` / `readMeta` 开始时 `+1`、`finally` 时 `-1`；`awaitFileIdle` 每 50ms 轮询直到计数为 0 或超时（超时继续删除流程，不抛异常）。
+
+**④ 播放器立即释放**（`VideoPlayerViewModel` + `VideoPlayerScreen`）
+
+```kotlin
+// ViewModel：幂等释放，不依赖 onCleared
+private var released = false
+fun releasePlayer() {
+    if (released) return
+    released = true
+    runCatching { player.stop(); player.clearMediaItems(); player.release() }
+}
+
+// Screen：dismissPlayer 顺序固定
+viewModel.onStop()            // 强制落库（release 前必须完成，release 后拿不到 duration）
+viewModel.releasePlayer()     // 立即归还 fd
+playerView?.apply { player = null; visibility = View.INVISIBLE }
+onBack()
+```
+
+`onCleared` 中改为 `persistProgressFinal(); releasePlayer()`，重复调用自动跳过。
+
+**⑤ 错误文案**：仍失败时提示「删除失败，文件仍被系统占用，请稍后重试」（去掉“目录只读”这类误导性描述，目录只读会在更早的写入阶段暴露）。
+
+#### 边界与不做项
+
+- 不引入 `MediaStore.createDeleteRequest`（需要系统弹窗，破坏“长按即删”的体验）。
+- 不把删除改成“先移入回收站目录再删”（用户明确要求物理删除）。
+- 删除失败时**仍然完全不动 DB**（保持 §3.7 的原子性约定）。
+
+#### 测试与验收
+
+| 层级 | 用例 |
+|------|------|
+| `core:data`（Fake Source） | ① 删除成功时调用顺序为 `awaitFileIdle → delete → purge`；② 删文件失败时不调用 `purge`、不删 DB 行；③ 第一次失败第二次成功（Fake `File` 不可注入，改用可注入的 `deleteWithRetry` 纯函数测重试次数） |
+| 真机 | 单个视频连续删除 10 次，**每次一次成功**；播放后立刻返回并删除；缩略图生成中（快速滑列表）立即长按删除 |
+
+---
+
+### 11.3 R3：移除视频页“继续观看”UI
+
+#### 决策（D17）
+
+- **保留**：`video_progress` 表、LRU=3、`SaveVideoProgressUseCase` 的「≥10s 才写、位置夹取」规则、`VideoRepository.getProgress()`（播放页续播仍依赖它）。
+- **移除**：视频页顶部“继续观看”整块 UI（标题、横向卡片、剩余时长角标、进度条）。
+- **不做**：不提供“显示/隐藏继续观看”的开关（用户要求直接删去）。
+
+#### 代码落点
+
+| 文件 | 改动 |
+|------|------|
+| `VideoLibraryViewModel.kt` | `VideoLibraryUiState.Ready` 删除 `recent` 字段；`render()` 不再透传 `data.recent` |
+| `VideoLibraryScreen.kt` | 删除 `showRecent` / `recentOffset`、`VideoBody` 的 `showRecent` 参数、`VideoGrid` 的 `recent`/`showRecent` 参数、`RecentSection`、`RecentVideoCard`；删除 `LazyRow`、`LinearProgressIndicator`、`formatDuration` 等随之无用的 import |
+| `VideoLibraryScreen.kt`（滚动） | `LaunchedEffect(query)` 的复位逻辑不变；`currentGroup` 改为 `gridState.firstVisibleItemIndex / VIDEO_GROUP_SIZE`；分组跳转 `scrollToItem(target)`（去掉 `+offset`） |
+| `GetVideoLibraryUseCase` / `VideoRepository.observeRecent()` | **保留**（数据仍需要，且后续可复用于“最近观看”二级页） |
+| `VideoLibraryViewModelTest.kt` | 删除/改写与 `recent` 相关的断言 |
+
+#### 影响与验收
+
+- 进入视频页：首屏第一行即视频卡片（无“继续观看”标题与横滑卡片）；
+- 分组跳转/当前组高亮仍准确（`50` 个一组）；
+- 搜索为空/非空切换时滚动复位行为不变；
+- 观看 3 个视频后返回列表：**列表无任何“继续观看”痕迹**，但直接点开这 3 个视频仍从上次位置续播（`getProgress` 生效）。
+
+### 11.4 R4：播放器底部控制层三层重构
+
+#### 目标布局（D18）
+
+```
+横屏
+┌──────────────────────────────────────────────────────────────┐
+│ ←  文件名.mp4（可点：弹全名 + 复制）                            │
+│                                                              │
+│                        [ 视频画面 ]                           │
+│                                                              │
+│  8:21/23:05                                  ← ① 时间行（仅左）│
+│  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁●▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁     ← ② 细进度条│
+│  [⏸] [⏭]                              [1.0x] [⟳]  ← ③ 按钮行    │
+└──────────────────────────────────────────────────────────────┘
+竖屏：同结构，底栏整体上移出导航条安全区，左右按钮仍贴边。
+```
+
+#### ① 时间行
+
+- 文案：`"${formatDuration(positionMs)}/${formatDuration(durationMs)}"`（**无空格**，如 `8:21/23:05`；时长未知时 `--:--/--:--`）。
+- 样式：13sp、`Color.White.copy(alpha = 0.9f)`、Normal 字重；开启等宽数字（`fontFeatureSettings = "tnum"`）避免秒数跳动时宽度抖。
+- 位置：仅左侧，与下方左侧图标视觉左缘对齐（`padding(start = 4.dp)`）；行高 18dp；右侧留空。
+- 拖动进度条时**实时显示草稿位置**（如 `8:35/23:05`），抬手后才真正 seek。
+
+#### ② 进度条（`PlayerProgressBar`）
+
+自定义 `Canvas + pointerInput`，**不使用 Material3 `Slider`**（其 4dp 轨道与 20dp thumb 环无法压到目标规格）。
+
+| 项目 | 常规态 | 拖动态 |
+|------|--------|--------|
+| 轨道高度 | 3dp（圆角 2dp） | 4.5dp |
+| 已播颜色 | `Color.White` | `Color.White` |
+| 未播颜色 | `Color.White.copy(alpha = 0.28f)` | 同左 |
+| 光标 | 实心白圆直径 **10dp**，无外环/无阴影 | 14dp |
+| 边界 | 进度为 0 或时长未知时不画光标 | 同左 |
+
+- 触控：整条可点区域高 **28dp**（`Modifier.height(28.dp)`，Canvas 垂直居中绘制）；点击任意位置直接 seek；横向拖动用 `detectHorizontalDragGestures`，内部维护草稿值，`onDragEnd` 才回调 `onSeekTo`（沿用现有“草稿”策略，避免高频 seek）。
+- 事件消费：进度条必须 consume 横向拖动手势，避免同一次拖动又触发全屏“左右滑快退/快进”。
+- 无障碍：`semantics { contentDescription = "播放进度"; progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f); setProgress { ... } }`。
+- RTL：本项目无 RTL 需求，固定 `LayoutDirection.Ltr` 绘制。
+
+#### ③ 按钮行
+
+| 区域 | 控件 | 规格与行为 |
+|------|------|-----------|
+| 左 | 播放/暂停 | `IconButton` 48dp，图标 26dp；播放中 `Icons.Filled.Pause`、暂停 `PlayArrow`、播放结束 `Replay`（点击从头播） |
+| 左 | 下一个视频 | `IconButton` 48dp，`Icons.Filled.SkipNext` 26dp；有下一个 → 纯白可用；无下一个 → `White.copy(alpha = 0.35f)` 且 `enabled = false`（无涟漪、点击无效） |
+| 右 | 倍速 | `TextButton`，宽约 52dp、高 40dp，14sp；循环 `0.5 → 1.0 → 1.5 → 2.0`，文案 `0.5x / 1.0x / 1.5x / 2.0x` |
+| 右 | 旋转屏幕 | `IconButton` 48dp，`Icons.Filled.ScreenRotation` 26dp；仅本次播放临时覆盖，不写偏好 |
+
+- 布局：`Row(fillMaxWidth, SpaceBetween)`，内部左、右各一个 `Row`；组内间距 0（靠 48dp 命中区自然撑开），最右图标右侧额外 4dp。
+- **删除**：`-15s` / `+15s` 两个 `TextButton`、常量 `SEEK_STEP_MS`；`PlayerControls` 的 `onSeekBy` 参数随之移除（`VideoPlayerViewModel.onSeekBy` 保留，供手势 / 未来复用）。
+- 容器：底部渐变 `Transparent → Black(0.78)`，`windowInsetsPadding(WindowInsets.systemBars)`，`padding(horizontal = 12.dp, vertical = 8.dp)`；层间距：时间→进度条 2dp，进度条→按钮 0dp。
+- 自动隐藏：保持 3s（播放中），任一按钮交互后重置计时；暂停时不自动隐藏（沿用 §9.5）。
+
+#### “下一个视频”的数据与行为（D19）
+
+**顺序定义**：以“视频页当前搜索词 + 当前排序”得到的列表为准，当前视频在列表中的下一项。
+
+1. **路由传参**：`video_player/{videoKeyId}?query={query}`；列表页跳转时把当前搜索框文本 `Uri.encode` 传入（可空，缺省 `""`）；随机按钮进入时传空（全库）。
+2. **播放页计算**：`VideoPlayerViewModel` 新增注入 `GetVideoLibraryUseCase`，并读取 `SavedStateHandle["query"]`：
+
+```kotlin
+private val playQueue: StateFlow<List<VideoSummary>> = combine(
+    getVideoLibrary(),
+    flowOf(queryParam),
+) { data, q ->
+    val keywords = parseSearchKeywords(q)
+    data.videos.filter { matchesAllKeywords(it.key.fileName, keywords) }
+}.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+val nextVideo: StateFlow<VideoSummary?> = combine(playQueue, currentKey) { list, cur ->
+    val i = list.indexOfFirst { it.key == cur }
+    if (i in 0 until list.lastIndex) list[i + 1] else null
+}.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+```
+
+3. **当前 key 改为可变**：`private val key` → `MutableStateFlow<VideoKey?>`；抽取 `loadVideo(key)`：`getVideo → getProgress → setMediaItem → prepare → seekTo(start) → play`，并重置 `ended = false`、`boostSpeed = null`、显式 `setPlaybackSpeed(speed)`。
+4. **点击行为**：`onPlayNext()` → 先 `persistProgress(force = true)` 落库当前视频 → `loadVideo(next.key)`（页内切换，不重建页面、不重新导航）。
+5. **失败跳过**：下一个文件已被外部删除时（`getVideo` 失败）自动尝试再下一个，最多连续跳过 3 个，全部失败提示「下一个视频不可用」。
+6. **边界**：当前视频不在列表内（如随机进入且搜索词非空）时 `indexOfFirst = -1` → 按钮置灰（不猜测语义）。播放结束态下按钮仍可用。
+
+---
+
+### 11.5 R5：设置页“默认阅读方式”去掉英文
+
+- `SettingsScreen.modeLabel()`：
+  - `ReaderMode.WEBTOON`：`下拉式（Webtoon）` → **`下拉式`**；
+  - `ReaderMode.PAGER`：`左右翻页（Pager）` → **`左右翻页`**。
+- 标题“漫画阅读方式”“默认阅读方式”不变；`RadioButton` 选中态与点击整行行为不变。
+- 全仓检查：`Webtoon` / `Pager` 仅剩代码注释与类名（`WebtoonViewer` / `PagerViewer`），阅读器 UI 无其它英文文案，无需改动。
+
+---
+
+### 11.6 R6：设置页新增“视频播放方式 → 默认视频朝向”
+
+#### 偏好与模型（D21）
+
+```kotlin
+// :core:model
+enum class VideoOrientationMode { PORTRAIT, LANDSCAPE, AUTO }
+
+// :core:domain PreferencesRepository
+fun observeVideoOrientationMode(): Flow<VideoOrientationMode>
+suspend fun setVideoOrientationMode(mode: VideoOrientationMode)
+```
+
+- DataStore key：`video_orientation`（int，存 ordinal）；**缺省/越界 → `PORTRAIT`**（用户口径：“选择竖屏则和当前情况相同”）。
+
+#### 设置页 UI
+
+位置：`视频库目录` 块之后、`关于` 之前，新增：
+
+```
+───────────────────────────────────────────
+视频播放方式
+ • 默认视频朝向                      竖屏
+───────────────────────────────────────────
+关于
+```
+
+- 点击行弹 `AlertDialog`：标题「默认视频朝向」，三个 `RadioButton`：**竖屏 / 横屏 / 根据视频比例**（顺序同行内枚举），默认选中竖屏；底部「关闭」。选择即写入偏好并关闭（与“默认阅读方式”交互一致）。副文案：竖屏「进入播放页保持竖屏」、横屏「进入播放页立即横屏」、根据比例「横向视频横屏，竖向视频竖屏」（不放括号补充说明）。
+- `SettingsUiState` 新增 `videoOrientation: VideoOrientationMode = PORTRAIT`；`combine` 增加 `observeVideoOrientationMode()`；新增 `onVideoOrientationChange(mode)`。
+
+#### 播放页应用规则
+
+新增 `VideoRepository.readDimensions(key): Result<VideoDimensions>`（`:core:model` 定义 `data class VideoDimensions(width: Int, height: Int, rotationDegrees: Int)`，由 `VideoRepositoryImpl` 调 `source.readMeta` 映射，domain 层不依赖 `:source:video`）。
+
+纯函数（可单测）：
+
+```kotlin
+internal fun orientationRequest(mode: VideoOrientationMode, dims: VideoDimensions?): Int = when (mode) {
+    VideoOrientationMode.PORTRAIT -> SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    VideoOrientationMode.LANDSCAPE -> SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    VideoOrientationMode.AUTO -> {
+        val (w, h) = dims?.let {
+            if (it.rotationDegrees % 180 == 90) it.height to it.width else it.width to it.height
+        } ?: (0 to 0)
+        if (w > 0 && h > 0 && w >= h) SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        else SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    }
+}
+```
+
+| 偏好 | 视频宽高（含旋转矫正） | 生效方向 |
+|------|------------------------|----------|
+| 竖屏 | 忽略 | `SENSOR_PORTRAIT` |
+| 横屏 | 忽略 | `SENSOR_LANDSCAPE` |
+| 根据视频比例 | 宽 ≥ 高 | `SENSOR_LANDSCAPE` |
+| 根据视频比例 | 宽 < 高 | `SENSOR_PORTRAIT` |
+| 根据视频比例 | 读取失败 / 宽高为 0 | `SENSOR_PORTRAIT`（兜底） |
+
+**时序（关键）**：进入播放页 → VM 读取偏好与 `VideoDimensions`（仅 `AUTO` 模式才调用 `readDimensions`，其余模式跳过 IO）→ 确定方向 → **再** `setMediaItem/prepare/play`。方向切换发生在 `Loading` 阶段，避免“先竖屏出画面再旋转”的跳变。
+
+**优先级**：
+1. 方向请求以「视频 key」为粒度下发：`VideoOrientationRequest(keyId, orientation)`，每个视频首次装载时应用一次；
+2. 同一视频内的手动旋转不会被覆盖——屏幕用 `rememberSaveable(orientedKeyId)` 记住已应用的 key，config change 后不会重复应用；
+3. 切“下一个视频”时 key 变化，按新视频重新判定方向（横长视频 → 横屏、竖长视频 → 竖屏；固定模式则为偏好方向）；
+4. 退出播放页：`onDispose` 恢复 `SCREEN_ORIENTATION_UNSPECIFIED`，不改系统“自动旋转”开关。
+
+#### 测试
+
+- 偏好：缺省/越界 → `PORTRAIT`；写入后 `observe` 立即返回新值；
+- `orientationRequest()`：`1920×1080/0° → 横`；`1080×1920/0° → 竖`；`1920×1080/90° → 竖`（手机竖拍）；`1920×1080/270° → 竖`；`dims = null → 竖`；
+- 手动旋转后同一视频内不被覆盖；切换“下一个视频”按新视频重新应用（原实现用一次性布尔哨兵，切换视频时被跳过，已修正）；
+- 设置项切换后，**新进入**播放页生效（已在播放页内的当前视频不强行改变）。
+
+---
+
+### 11.7 涉及文件清单（R1~R6）
+
+| 模块 | 文件 | 变更 |
+|------|------|------|
+| `:core:common` | `util/SearchKeywords.kt`（新）+ `SearchKeywordsTest.kt`（新） | 分词与 AND 匹配 |
+| `:core:model` | `VideoOrientationMode.kt`（新）、`VideoDimensions.kt`（新） | 偏好枚举与视频宽高 |
+| `:core:domain` | `PreferencesRepository.kt` | +`observeVideoOrientationMode` / `setVideoOrientationMode` |
+| `:core:domain` | `VideoRepository.kt` | +`readDimensions(key)` |
+| `:core:data` | `prefs/PreferencesRepositoryImpl.kt` | 新增 `video_orientation` key 与默认值 |
+| `:core:data` | `repository/VideoRepositoryImpl.kt` | 删除顺序反转 + 重试 + `readDimensions` 映射 |
+| `:source:video` | `VideoSource.kt` | +`awaitFileIdle(absPath, timeoutMs)`（默认空实现） |
+| `:source:video` | `LocalVideoSource.kt` | in-flight 计数；`purgeMediaStore` 不再 `scanFile` |
+| `:feature:library` | `LibraryViewModel.kt`、`LibraryScreen.kt` | 多关键词过滤；placeholder 文案 |
+| `:feature:video` | `VideoLibraryViewModel.kt` | 多关键词过滤；`Ready` 去 `recent`；删除失败文案 |
+| `:feature:video` | `VideoLibraryScreen.kt` | 删除“继续观看”一切 UI/偏移；跳转带 `query` |
+| `:feature:video` | `VideoPlayerViewModel.kt` | `nextVideo`、`onPlayNext`、`currentKey` 可变、`releasePlayer()`、朝向应用 |
+| `:feature:video` | `VideoPlayerScreen.kt` | `releasePlayer`、按偏好设置方向、控制层新参数 |
+| `:feature:video` | `components/PlayerControls.kt` | 三层重构 + 自定义 `PlayerProgressBar` |
+| `:feature:video` | `components/VideoDrawer.kt` | 搜索 placeholder |
+| `:feature:settings` | `SettingsScreen.kt` / `SettingsViewModel.kt` | 去英文；新增“视频播放方式”分区与状态 |
+| `:app` | `navigation/ComicNestNavHost.kt` | 播放路由新增可空 `query` 参数 |
+| 文档 | `README.md`、`docs/DESIGN_v2.md` | 功能说明与本节 |
+
+### 11.8 测试与验收（本轮）
+
+| 类型 | 内容 |
+|------|------|
+| 单测 | `SearchKeywordsTest`（6 例）；`OrientationRequestTest`（6 例）；`VideoLibraryViewModelTest` 补多关键词过滤、删 `recent` 断言；`VideoUseCaseRulesTest` 若无影响保持 |
+| 构建 | `:core:common:testDebugUnitTest`、`:core:data:testDebugUnitTest`、`:feature:video:testDebugUnitTest`、`:feature:settings:compileDebugKotlin`、`:app:assembleDebug/Release` |
+| 手工（R1） | 书架输入 `胡桃 芙宁娜` → 命中 `xx胡桃xx芙宁娜`；视频抽屉同；全角空格/多空格同样生效 |
+| 手工（R2） | ① 普通删除一次成功；② 刚看完返回后立刻删除一次成功；③ 缩略图正在生成时删除一次成功 |
+| 手工（R3） | 视频页无“继续观看”；连看 3 个后仍无；点开依旧续播 |
+| 手工（R4） | 横/竖屏底栏三层位置正确；末个视频“下一个”置灰；倍速循环与旋转按钮可用；±15s 已消失 |
+| 手工（R6） | 三选项分别生效；AUTO 下横长/竖长视频分别进入对应方向；手动旋转后不被自动覆盖；退出后方向不残留 |
+
+### 11.9 风险与边界
+
+- 删除重试最坏增加 ~200ms（在 IO 线程，不阻塞 UI，删除按钮无 loading 态）；
+- `readDimensions` 增加一次文件打开，仅 `AUTO` 模式使用，且发生在 Loading 阶段；
+- 自定义进度条需自行维护无障碍与命中区，已在上文约束；
+- 移除“继续观看”后首屏列表位置上移，分组跳转/恢复滚动位置需回归；
+- 本轮**不做**：搜索高亮/搜索历史、“最近观看”二级页、进度条缩略图预览、画中画/后台播放、播放列表管理。
+- 版本：`2.2.0` / `versionCode 6`（D22）。
+
+---
+
+*（DESIGN v2 完。实施时若与 `docs/demand_v2.txt` 或本文 §0 的 V1~V14 冲突，以 §0 为准；与 v1 `DESIGN.md` 冲突时，漫画侧以 v1 为准，视频侧以本文为准；v2.2 迭代以 §11 为准。）*

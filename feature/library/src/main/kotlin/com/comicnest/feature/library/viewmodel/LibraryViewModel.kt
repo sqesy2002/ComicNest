@@ -2,6 +2,8 @@ package com.comicnest.feature.library.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.comicnest.core.common.util.matchesAllKeywords
+import com.comicnest.core.common.util.parseSearchKeywords
 import com.comicnest.core.domain.model.LibraryUiData
 import com.comicnest.core.domain.repository.CollectionRepository
 import com.comicnest.core.domain.repository.PreferencesRepository
@@ -94,10 +96,11 @@ class LibraryViewModel @Inject constructor(
         if (_uiState.value is LibraryUiState.Error) return
         _comicCount.value = data.comics.size
         val keyword = query.trim()
-        val filtered = if (keyword.isEmpty()) {
+        val keywords = parseSearchKeywords(query)
+        val filtered = if (keywords.isEmpty()) {
             data.comics
         } else {
-            data.comics.filter { it.key.displayName.contains(keyword, ignoreCase = true) }
+            data.comics.filter { matchesAllKeywords(it.key.displayName, keywords) }
         }
         _uiState.value = when {
             data.roots.isEmpty() -> LibraryUiState.Empty(firstRun = true)

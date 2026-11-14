@@ -1,29 +1,22 @@
 package com.comicnest.feature.video.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Casino
@@ -55,24 +48,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import com.comicnest.core.common.util.formatDuration
-import com.comicnest.core.model.RecentVideo
 import com.comicnest.core.model.VideoSortMode
 import com.comicnest.core.model.VideoSummary
 import com.comicnest.core.model.VideoThumbnailState
@@ -90,17 +78,16 @@ import com.comicnest.feature.video.viewmodel.VIDEO_GROUP_SIZE
 import com.comicnest.feature.video.viewmodel.VideoEvent
 import com.comicnest.feature.video.viewmodel.VideoLibraryUiState
 import com.comicnest.feature.video.viewmodel.VideoLibraryViewModel
-import java.io.File
 import kotlinx.coroutines.launch
 
 /**
- * 视频页（DESIGN v2 §9.3）：网格 + 继续观看 + 顶栏（排序/随机/刷新）+ 左侧抽屉（搜索 + 每 50 个一组）。
- * 卡片点击播放，长按出动作菜单（播放/重命名/删除）。
+ * 视频页（DESIGN v2 §9.3 / §11.3）：网格 + 顶栏（排序/随机/刷新）+ 左侧抽屉（搜索 + 每 50 个一组）。
+ * 卡片点击播放，长按出动作菜单（播放/重命名/删除）；“继续观看”区块自 v2.2 起不再展示。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VideoLibraryScreen(
-    onNavigateToPlayer: (videoKeyId: String) -> Unit,
+    onNavigateToPlayer: (videoKeyId: String, query: String) -> Unit,
     viewModel: VideoLibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -132,14 +119,13 @@ fun VideoLibraryScreen(
     var lastQuery by remember { mutableStateOf<String?>(null) }
 
     val ready = state as? VideoLibraryUiState.Ready
-    // “继续观看”整行占据网格首项，仅在搜索为空时展示
-    val showRecent = query.isBlank() && ready?.recent?.isNotEmpty() == true
-    val recentOffset = if (showRecent) 1 else 0
+    val latestQuery by rememberUpdatedState(query)
+    val latestNavigate by rememberUpdatedState(onNavigateToPlayer)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { e ->
             when (e) {
-                is VideoEvent.NavigateToPlayer -> onNavigateToPlayer(e.videoKeyId)
+                is VideoEvent.NavigateToPlayer -> latestNavigate(e.videoKeyId, latestQuery)
                 is VideoEvent.Message -> snackbarHostState.showSnackbar(e.text)
             }
         }
@@ -155,21 +141,20 @@ fun VideoLibraryScreen(
         val target = pendingGroupTarget
         val current = state as? VideoLibraryUiState.Ready
         if (target != null && current != null) {
-            val offset = if (query.isBlank() && current.recent.isNotEmpty()) 1 else 0
             gridState.scrollToItem(
-                (target + offset).coerceAtMost((current.videos.size - 1 + offset).coerceAtLeast(0)),
+                target.coerceAtMost((current.videos.size - 1).coerceAtLeast(0)),
             )
             pendingGroupTarget = null
         }
     }
 
     // 可见项触发缩略图（懒生成，不预生成）
-    LaunchedEffect(gridState, ready?.videos, recentOffset) {
+    LaunchedEffect(gridState, ready?.videos) {
         val videos = ready?.videos ?: return@LaunchedEffect
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index } }
             .collect { indices ->
                 indices.forEach { index ->
-                    val summary = videos.getOrNull(index - recentOffset) ?: return@forEach
+                    val summary = videos.getOrNull(index) ?: return@forEach
                     if (summary.thumbState == VideoThumbnailState.PENDING) {
                         viewModel.onThumbnailVisible(summary)
                     }
@@ -177,10 +162,10 @@ fun VideoLibraryScreen(
             }
     }
 
-    val currentGroup by remember(recentOffset, query) {
+    val currentGroup by remember(query) {
         derivedStateOf {
             if (query.isBlank()) {
-                ((gridState.firstVisibleItemIndex - recentOffset).coerceAtLeast(0)) / VIDEO_GROUP_SIZE
+                gridState.firstVisibleItemIndex.coerceAtLeast(0) / VIDEO_GROUP_SIZE
             } else {
                 -1
             }
@@ -245,7 +230,6 @@ fun VideoLibraryScreen(
                     else -> VideoBody(
                         state = state,
                         gridState = gridState,
-                        showRecent = showRecent,
                         onOpen = { viewModel.onOpenVideo(it.key) },
                         onLongPress = viewModel::onLongPressVideo,
                         onAddRoot = { showAddRoot = true },
@@ -306,7 +290,6 @@ fun VideoLibraryScreen(
 private fun VideoBody(
     state: VideoLibraryUiState,
     gridState: LazyGridState,
-    showRecent: Boolean,
     onOpen: (VideoSummary) -> Unit,
     onLongPress: (VideoSummary) -> Unit,
     onAddRoot: () -> Unit,
@@ -323,8 +306,6 @@ private fun VideoBody(
         is VideoLibraryUiState.NoResult -> EmptyState(text = "没有找到匹配「${state.query}」的视频")
         is VideoLibraryUiState.Ready -> VideoGrid(
             videos = state.videos,
-            recent = state.recent,
-            showRecent = showRecent,
             gridState = gridState,
             onOpen = onOpen,
             onLongPress = onLongPress,
@@ -383,8 +364,6 @@ private fun PermissionGuide(onGrant: () -> Unit) {
 @Composable
 private fun VideoGrid(
     videos: List<VideoSummary>,
-    recent: List<RecentVideo>,
-    showRecent: Boolean,
     gridState: LazyGridState,
     onOpen: (VideoSummary) -> Unit,
     onLongPress: (VideoSummary) -> Unit,
@@ -397,11 +376,6 @@ private fun VideoGrid(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (showRecent && recent.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                RecentSection(recent = recent, onOpen = onOpen)
-            }
-        }
         items(videos, key = { it.key.id }) { summary ->
             VideoCard(
                 summary = summary,
@@ -409,90 +383,6 @@ private fun VideoGrid(
                 onLongClick = { onLongPress(summary) },
             )
         }
-    }
-}
-
-/** “继续观看”区（DESIGN v2 §9.3）：最多 3 张 16:9 卡 + 底部进度条 + 右上角剩余时长。 */
-@Composable
-private fun RecentSection(
-    recent: List<RecentVideo>,
-    onOpen: (VideoSummary) -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "继续观看",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
-        )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(recent, key = { it.summary.key.id }) { item ->
-                RecentVideoCard(item = item, onClick = { onOpen(item.summary) })
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-    }
-}
-
-@Composable
-private fun RecentVideoCard(
-    item: RecentVideo,
-    onClick: () -> Unit,
-) {
-    Column(modifier = Modifier.width(180.dp)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(onClick = onClick),
-        ) {
-            val path = item.summary.thumbPath
-            if (path != null && item.summary.thumbState == VideoThumbnailState.READY) {
-                AsyncImage(
-                    model = File(path),
-                    contentDescription = item.summary.displayName,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Movie,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                )
-            }
-            Text(
-                text = "剩余 ${formatDuration(item.progress.remainingMs)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .background(
-                        MaterialTheme.colorScheme.scrim.copy(alpha = 0.55f),
-                        RoundedCornerShape(4.dp),
-                    )
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-            )
-            LinearProgressIndicator(
-                progress = { item.progress.fraction },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(2.dp),
-            )
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = item.summary.displayName,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
     }
 }
 

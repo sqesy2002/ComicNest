@@ -15,10 +15,13 @@ import com.comicnest.source.video.thumb.VideoThumbnailGenerator
 import com.comicnest.source.video.thumb.VideoThumbnailStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -45,6 +48,9 @@ class LocalVideoSource @Inject constructor(
 
     private val gate = Semaphore(GENERATE_CONCURRENCY)
 
+    /** 每路径正在读取的引用计数：删除前用 [awaitFileIdle] 等它归零（DESIGN v2 §11.2 R2）。 */
+    private val activeReads = ConcurrentHashMap<String, AtomicInteger>()
+
     override suspend fun scanLibrary(root: VideoRoot): Result<List<VideoSummary>> =
         withContext(Dispatchers.IO) {
             runCatchingIo {
@@ -58,12 +64,17 @@ class LocalVideoSource @Inject constructor(
     override suspend fun readMeta(absPath: String): Result<VideoMeta> =
         withContext(Dispatchers.IO) {
             runCatchingIo {
-                val retriever = MediaMetadataRetriever()
+                beginRead(absPath)
                 try {
-                    retriever.setDataSource(absPath)
-                    VideoMetaReader.fromRetriever(retriever) ?: error("无法读取视频元数据")
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(absPath)
+                        VideoMetaReader.fromRetriever(retriever) ?: error("无法读取视频元数据")
+                    } finally {
+                        releaseQuietly(retriever)
+                    }
                 } finally {
-                    releaseQuietly(retriever)
+                    endRead(absPath)
                 }
             }
         }
@@ -140,17 +151,29 @@ class LocalVideoSource @Inject constructor(
         false
     }.getOrDefault(false)
 
+    /** 只删 MediaStore 索引，不做重扫：重扫会异步打开文件，导致紧随的删除失败（DESIGN v2 §11.2 R2）。 */
     override suspend fun purgeMediaStore(absPath: String) = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val collection = MediaStore.Files.getContentUri("external")
-        val removed = runCatching {
+        runCatching {
             resolver.delete(collection, "${MediaStore.MediaColumns.DATA} = ?", arrayOf(absPath))
-        }.getOrDefault(0)
-        if (removed <= 0) {
-            // 降级：让媒体库重新扫描该路径（文件已不存在时表现为移除索引）
-            runCatching {
-                MediaScannerConnection.scanFile(context, arrayOf(absPath), null) { _, _ -> }
-            }.onFailure { AppLog.w(TAG, "MediaStore 清理降级失败：$absPath", it) }
+        }.onFailure { AppLog.w(TAG, "MediaStore 清理失败：$absPath", it) }
+        Unit
+    }
+
+    override suspend fun awaitFileIdle(absPath: String, timeoutMs: Long) {
+        withTimeoutOrNull(timeoutMs) {
+            while ((activeReads[absPath]?.get() ?: 0) > 0) delay(READ_IDLE_POLL_MS)
+        }
+    }
+
+    private fun beginRead(absPath: String) {
+        activeReads.getOrPut(absPath) { AtomicInteger() }.incrementAndGet()
+    }
+
+    private fun endRead(absPath: String) {
+        activeReads[absPath]?.let { counter ->
+            if (counter.decrementAndGet() <= 0) activeReads.remove(absPath, counter)
         }
     }
 
@@ -160,21 +183,26 @@ class LocalVideoSource @Inject constructor(
         sizeBytes: Long,
         lastModified: Long,
     ): ThumbnailResult {
-        val retriever = MediaMetadataRetriever()
+        beginRead(absPath)
         try {
-            retriever.setDataSource(absPath)
-            val meta = VideoMetaReader.fromRetriever(retriever) ?: error("无法读取视频元数据")
-            val frame = VideoThumbnailGenerator.frameAtMiddle(retriever, meta.durationMs)
-                ?: error("无法获取中间帧")
-            val rotated = VideoThumbnailGenerator.applyRotation(frame, meta.rotationDegrees)
-            val scaled = VideoThumbnailGenerator.scaleToWidth(rotated, THUMB_MAX_WIDTH_PX)
-            val bytes = VideoThumbnailGenerator.encodeJpeg(scaled)
-            val target = store.pathFor(key.id, sizeBytes, lastModified)
-            store.write(target, bytes)
-            store.enforceCapacity()
-            return ThumbnailResult(path = target.absolutePath, durationMs = meta.durationMs)
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(absPath)
+                val meta = VideoMetaReader.fromRetriever(retriever) ?: error("无法读取视频元数据")
+                val frame = VideoThumbnailGenerator.frameAtMiddle(retriever, meta.durationMs)
+                    ?: error("无法获取中间帧")
+                val rotated = VideoThumbnailGenerator.applyRotation(frame, meta.rotationDegrees)
+                val scaled = VideoThumbnailGenerator.scaleToWidth(rotated, THUMB_MAX_WIDTH_PX)
+                val bytes = VideoThumbnailGenerator.encodeJpeg(scaled)
+                val target = store.pathFor(key.id, sizeBytes, lastModified)
+                store.write(target, bytes)
+                store.enforceCapacity()
+                return ThumbnailResult(path = target.absolutePath, durationMs = meta.durationMs)
+            } finally {
+                releaseQuietly(retriever)
+            }
         } finally {
-            releaseQuietly(retriever)
+            endRead(absPath)
         }
     }
 
@@ -188,5 +216,6 @@ class LocalVideoSource @Inject constructor(
         private const val THUMB_MAX_WIDTH_PX = 480
         private const val GENERATE_CONCURRENCY = 3
         private const val TIMEOUT_MS = 8_000L
+        private const val READ_IDLE_POLL_MS = 40L
     }
 }

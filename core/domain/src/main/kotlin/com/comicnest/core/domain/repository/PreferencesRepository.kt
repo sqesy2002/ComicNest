@@ -2,6 +2,7 @@ package com.comicnest.core.domain.repository
 
 import com.comicnest.core.model.ReaderMode
 import com.comicnest.core.model.SortMode
+import com.comicnest.core.model.VideoOrientationMode
 import com.comicnest.core.model.VideoSortMode
 import kotlinx.coroutines.flow.Flow
 
@@ -19,4 +20,9 @@ interface PreferencesRepository {
     fun observeVideoSortMode(): Flow<VideoSortMode>
 
     suspend fun setVideoSortMode(mode: VideoSortMode)
+
+    /** 默认视频朝向（DESIGN v2 §11.6 R6），缺省为竖屏。 */
+    fun observeVideoOrientation(): Flow<VideoOrientationMode>
+
+    suspend fun setVideoOrientation(mode: VideoOrientationMode)
 }

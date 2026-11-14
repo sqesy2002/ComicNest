@@ -72,4 +72,10 @@ interface VideoSource {
 
     /** 尽力清理系统 MediaStore 中该文件的索引（删除失败不抛出，DESIGN v2 §3.7）。 */
     suspend fun purgeMediaStore(absPath: String)
+
+    /**
+     * 等待来源侧对该文件的读取结束（缩略图/元数据），删除前调用以避免自伤占用（DESIGN v2 §11.2 R2）。
+     * 默认无操作，便于测试替身实现。
+     */
+    suspend fun awaitFileIdle(absPath: String, timeoutMs: Long) = Unit
 }

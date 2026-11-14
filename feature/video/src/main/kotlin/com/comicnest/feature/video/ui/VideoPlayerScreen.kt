@@ -37,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
 import com.comicnest.core.common.util.formatDuration
+import com.comicnest.core.model.VideoOrientation
 import com.comicnest.feature.video.ui.components.PlayerControls
 import com.comicnest.feature.video.viewmodel.VideoPlayerUiState
 import com.comicnest.feature.video.viewmodel.VideoPlayerViewModel
@@ -84,14 +86,21 @@ fun VideoPlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
+    val hasNext by viewModel.hasNext.collectAsStateWithLifecycle()
+    val orientationRequest by viewModel.orientationRequest.collectAsStateWithLifecycle()
 
     var controlsVisible by remember { mutableStateOf(true) }
     var hintText by remember { mutableStateOf<String?>(null) }
+    // 已应用方向的视频 key：同一视频的 config change 不重复应用，不覆盖用户手动旋转；
+    // 切换「下一个视频」时 key 变化，重新应用（DESIGN v2 §11.6 R6）
+    var orientedKeyId by rememberSaveable { mutableStateOf<String?>(null) }
     // 持有 PlayerView 引用：退出时主动清屏，避免导航淡出期间残留最后一帧
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
 
     val dismissPlayer: () -> Unit = {
         viewModel.onStop()
+        // 立即释放播放器，尽早归还文件句柄（DESIGN v2 §11.2 R2）
+        viewModel.releasePlayer()
         playerView?.apply {
             player = null
             visibility = View.INVISIBLE
@@ -132,6 +141,17 @@ fun VideoPlayerScreen(
             }
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+    }
+
+    // 默认视频朝向（DESIGN v2 §11.6 R6）：装载阶段已算好，进入新视频时应用
+    LaunchedEffect(orientationRequest) {
+        val request = orientationRequest ?: return@LaunchedEffect
+        if (request.keyId == orientedKeyId) return@LaunchedEffect
+        activity?.requestedOrientation = when (request.orientation) {
+            VideoOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            VideoOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        }
+        orientedKeyId = request.keyId
     }
 
     // 播放中 3s 后自动隐藏控件
@@ -342,15 +362,19 @@ fun VideoPlayerScreen(
                         durationMs = playback.durationMs,
                         speed = playback.speed,
                         ended = playback.ended,
+                        hasNext = hasNext,
                         onBack = dismissPlayer,
                         onTogglePlay = {
                             viewModel.onTogglePlay()
                             controlsVisible = true
                         },
                         onSeekTo = viewModel::onSeekTo,
-                        onSeekBy = { viewModel.onSeekBy(it) },
                         onCycleSpeed = viewModel::onCycleSpeed,
                         onToggleOrientation = { toggleOrientation(activity) },
+                        onPlayNext = {
+                            viewModel.onPlayNext()
+                            controlsVisible = true
+                        },
                     )
                 }
             }

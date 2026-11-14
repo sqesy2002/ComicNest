@@ -39,11 +39,12 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.comicnest.core.model.LibraryRoot
 import com.comicnest.core.model.ReaderMode
+import com.comicnest.core.model.VideoOrientationMode
 import com.comicnest.core.ui.components.DirectoryPickerDialog
 import com.comicnest.feature.settings.viewmodel.SettingsEvent
 import com.comicnest.feature.settings.viewmodel.SettingsViewModel
 
-/** 设置页（DESIGN §9.8）：库根管理、默认阅读方式、关于。 */
+/** 设置页（DESIGN §9.8 / §11.6）：库根管理、默认阅读方式、视频播放方式、关于。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -71,6 +72,7 @@ fun SettingsScreen(
     var showAddRoot by remember { mutableStateOf(false) }
     var showAddVideoRoot by remember { mutableStateOf(false) }
     var showModeDialog by remember { mutableStateOf(false) }
+    var showOrientationDialog by remember { mutableStateOf(false) }
     var showLicense by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -155,6 +157,16 @@ fun SettingsScreen(
             }
 
             item { Divider() }
+            item { SectionHeader("视频播放方式") }
+            item {
+                ListItem(
+                    headlineContent = { Text("默认视频朝向") },
+                    supportingContent = { Text(orientationLabel(state.videoOrientation)) },
+                    modifier = Modifier.clickable { showOrientationDialog = true },
+                )
+            }
+
+            item { Divider() }
             item { SectionHeader("关于") }
             item {
                 ListItem(headlineContent = { Text("版本") }, supportingContent = { Text(appVersion) })
@@ -200,6 +212,14 @@ fun SettingsScreen(
         )
     }
 
+    if (showOrientationDialog) {
+        OrientationDialog(
+            current = state.videoOrientation,
+            onSelect = { viewModel.onVideoOrientationChange(it) },
+            onDismiss = { showOrientationDialog = false },
+        )
+    }
+
     if (showLicense) {
         AlertDialog(
             onDismissRequest = { showLicense = false },
@@ -226,8 +246,8 @@ private fun SectionHeader(text: String) {
 }
 
 private fun modeLabel(mode: ReaderMode): String = when (mode) {
-    ReaderMode.WEBTOON -> "下拉式（Webtoon）"
-    ReaderMode.PAGER -> "左右翻页（Pager）"
+    ReaderMode.WEBTOON -> "下拉式"
+    ReaderMode.PAGER -> "左右翻页"
 }
 
 @Composable
@@ -251,6 +271,54 @@ private fun ModeDialog(
                     ) {
                         RadioButton(selected = mode == current, onClick = { onSelect(mode); onDismiss() })
                         Text(modeLabel(mode))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
+}
+
+private fun orientationLabel(mode: VideoOrientationMode): String = when (mode) {
+    VideoOrientationMode.PORTRAIT -> "竖屏"
+    VideoOrientationMode.LANDSCAPE -> "横屏"
+    VideoOrientationMode.AUTO -> "根据视频比例"
+}
+
+private fun orientationHint(mode: VideoOrientationMode): String = when (mode) {
+    VideoOrientationMode.PORTRAIT -> "进入播放页保持竖屏"
+    VideoOrientationMode.LANDSCAPE -> "进入播放页立即横屏"
+    VideoOrientationMode.AUTO -> "横向视频横屏，竖向视频竖屏"
+}
+
+@Composable
+private fun OrientationDialog(
+    current: VideoOrientationMode,
+    onSelect: (VideoOrientationMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("默认视频朝向") },
+        text = {
+            Column {
+                VideoOrientationMode.entries.forEach { mode ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(mode); onDismiss() }
+                            .padding(vertical = 8.dp),
+                    ) {
+                        RadioButton(selected = mode == current, onClick = { onSelect(mode); onDismiss() })
+                        Column(modifier = Modifier.padding(start = 4.dp)) {
+                            Text(orientationLabel(mode))
+                            Text(
+                                text = orientationHint(mode),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

@@ -14,7 +14,9 @@ import com.comicnest.core.model.ReaderMode
 import com.comicnest.core.model.ReadProgress
 import com.comicnest.core.model.RecentVideo
 import com.comicnest.core.model.SortMode
+import com.comicnest.core.model.VideoDimensions
 import com.comicnest.core.model.VideoKey
+import com.comicnest.core.model.VideoOrientationMode
 import com.comicnest.core.model.VideoProgress
 import com.comicnest.core.model.VideoRoot
 import com.comicnest.core.model.VideoSortMode
@@ -92,6 +94,7 @@ class FakePreferencesRepository : PreferencesRepository {
     val sortFlow = MutableStateFlow(SortMode.NAME)
     val readerFlow = MutableStateFlow(ReaderMode.WEBTOON)
     val videoSortFlow = MutableStateFlow(VideoSortMode.NAME)
+    val videoOrientationFlow = MutableStateFlow(VideoOrientationMode.PORTRAIT)
     override fun observeSortMode(): Flow<SortMode> = sortFlow
     override suspend fun setSortMode(mode: SortMode) {
         sortFlow.value = mode
@@ -105,6 +108,11 @@ class FakePreferencesRepository : PreferencesRepository {
     override fun observeVideoSortMode(): Flow<VideoSortMode> = videoSortFlow
     override suspend fun setVideoSortMode(mode: VideoSortMode) {
         videoSortFlow.value = mode
+    }
+
+    override fun observeVideoOrientation(): Flow<VideoOrientationMode> = videoOrientationFlow
+    override suspend fun setVideoOrientation(mode: VideoOrientationMode) {
+        videoOrientationFlow.value = mode
     }
 }
 
@@ -182,6 +190,9 @@ class FakeVideoRepository : VideoRepository {
         deleted += key
         return deleteResult
     }
+
+    override suspend fun readDimensions(key: VideoKey): Result<VideoDimensions> =
+        Result.failure(NoSuchElementException("no dimensions"))
 
     override suspend fun renameVideo(key: VideoKey, newFileName: String): Result<VideoKey> {
         renamed += key to newFileName

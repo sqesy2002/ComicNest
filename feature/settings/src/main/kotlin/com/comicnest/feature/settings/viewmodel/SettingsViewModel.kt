@@ -12,6 +12,7 @@ import com.comicnest.core.domain.usecase.video.RemoveVideoRootUseCase
 import com.comicnest.core.domain.usecase.video.ScanVideoLibraryUseCase
 import com.comicnest.core.model.LibraryRoot
 import com.comicnest.core.model.ReaderMode
+import com.comicnest.core.model.VideoOrientationMode
 import com.comicnest.core.model.VideoRoot
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -23,11 +24,12 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** 设置页状态（DESIGN §3.7 / §9.8）：漫画库根 + 视频库根 + 默认阅读模式。 */
+/** 设置页状态（DESIGN §3.7 / §9.8）：漫画库根 + 视频库根 + 默认阅读模式 + 默认视频朝向。 */
 data class SettingsUiState(
     val roots: List<LibraryRoot> = emptyList(),
     val readerMode: ReaderMode = ReaderMode.WEBTOON,
     val videoRoots: List<VideoRoot> = emptyList(),
+    val videoOrientation: VideoOrientationMode = VideoOrientationMode.PORTRAIT,
 )
 
 sealed interface SettingsEvent {
@@ -53,8 +55,9 @@ class SettingsViewModel @Inject constructor(
         libraryRepository.observeRoots(),
         preferencesRepository.observeReaderMode(),
         videoRepository.observeRoots(),
-    ) { roots, mode, videoRoots ->
-        SettingsUiState(roots, mode, videoRoots)
+        preferencesRepository.observeVideoOrientation(),
+    ) { roots, mode, videoRoots, orientation ->
+        SettingsUiState(roots, mode, videoRoots, orientation)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     private val _events = Channel<SettingsEvent>(Channel.BUFFERED)
@@ -85,6 +88,11 @@ class SettingsViewModel @Inject constructor(
 
     fun onReaderModeChange(mode: ReaderMode) {
         viewModelScope.launch { preferencesRepository.setReaderMode(mode) }
+    }
+
+    /** 默认视频朝向（DESIGN v2 §11.6 R6）：只写偏好，播放页进入时读取。 */
+    fun onVideoOrientationChange(mode: VideoOrientationMode) {
+        viewModelScope.launch { preferencesRepository.setVideoOrientation(mode) }
     }
 
     /** 添加视频库目录：校验通过后立即扫描一次（只取一级文件）。 */

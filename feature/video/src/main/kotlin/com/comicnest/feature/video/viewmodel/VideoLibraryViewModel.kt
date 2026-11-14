@@ -2,6 +2,8 @@ package com.comicnest.feature.video.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.comicnest.core.common.util.matchesAllKeywords
+import com.comicnest.core.common.util.parseSearchKeywords
 import com.comicnest.core.domain.repository.PreferencesRepository
 import com.comicnest.core.domain.usecase.video.AddVideoRootUseCase
 import com.comicnest.core.domain.usecase.video.DeleteVideoUseCase
@@ -11,7 +13,6 @@ import com.comicnest.core.domain.usecase.video.RandomVideoUseCase
 import com.comicnest.core.domain.usecase.video.RenameVideoUseCase
 import com.comicnest.core.domain.usecase.video.ScanVideoLibraryUseCase
 import com.comicnest.core.domain.usecase.video.RemoveVideoRootUseCase
-import com.comicnest.core.model.RecentVideo
 import com.comicnest.core.model.VideoKey
 import com.comicnest.core.model.VideoRoot
 import com.comicnest.core.model.VideoSortMode
@@ -36,7 +37,6 @@ sealed interface VideoLibraryUiState {
         val videos: List<VideoSummary>,
         val sortMode: VideoSortMode,
         val roots: List<VideoRoot>,
-        val recent: List<RecentVideo>,
     ) : VideoLibraryUiState
 
     /** [firstRun] 为 true 表示尚未导入任何视频根（引导添加）。 */
@@ -116,10 +116,11 @@ class VideoLibraryViewModel @Inject constructor(
         if (_uiState.value is VideoLibraryUiState.Error) return
         _totalCount.value = data.videos.size
         val keyword = query.trim()
-        val filtered = if (keyword.isEmpty()) {
+        val keywords = parseSearchKeywords(query)
+        val filtered = if (keywords.isEmpty()) {
             data.videos
         } else {
-            data.videos.filter { it.key.fileName.contains(keyword, ignoreCase = true) }
+            data.videos.filter { matchesAllKeywords(it.key.fileName, keywords) }
         }
         _uiState.value = when {
             data.roots.isEmpty() -> VideoLibraryUiState.Empty(firstRun = true)
@@ -129,7 +130,6 @@ class VideoLibraryViewModel @Inject constructor(
                 videos = filtered,
                 sortMode = data.sortMode,
                 roots = data.roots,
-                recent = data.recent,
             )
         }
     }

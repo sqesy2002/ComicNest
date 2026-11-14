@@ -3,10 +3,15 @@ package com.comicnest.feature.settings.viewmodel
 import app.cash.turbine.test
 import com.comicnest.core.domain.repository.LibraryRepository
 import com.comicnest.core.domain.repository.PreferencesRepository
+import com.comicnest.core.domain.repository.VideoRepository
 import com.comicnest.core.domain.usecase.AddLibraryRootUseCase
 import com.comicnest.core.domain.usecase.ScanLibraryUseCase
+import com.comicnest.core.domain.usecase.video.AddVideoRootUseCase
+import com.comicnest.core.domain.usecase.video.RemoveVideoRootUseCase
+import com.comicnest.core.domain.usecase.video.ScanVideoLibraryUseCase
 import com.comicnest.core.model.LibraryRoot
 import com.comicnest.core.model.ReaderMode
+import com.comicnest.core.model.VideoOrientationMode
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -29,8 +34,12 @@ class SettingsViewModelTest {
 
     private val libRepo = mockk<LibraryRepository>(relaxed = true)
     private val prefs = mockk<PreferencesRepository>(relaxed = true)
+    private val videoRepo = mockk<VideoRepository>(relaxed = true)
     private val addRoot = mockk<AddLibraryRootUseCase>()
     private val scan = mockk<ScanLibraryUseCase>(relaxed = true)
+    private val addVideoRoot = mockk<AddVideoRootUseCase>(relaxed = true)
+    private val removeVideoRoot = mockk<RemoveVideoRootUseCase>(relaxed = true)
+    private val scanVideo = mockk<ScanVideoLibraryUseCase>(relaxed = true)
 
     private val root = LibraryRoot.of("/x", "目录X", 0)
 
@@ -39,12 +48,23 @@ class SettingsViewModelTest {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         every { libRepo.observeRoots() } returns flowOf(listOf(root))
         every { prefs.observeReaderMode() } returns flowOf(ReaderMode.WEBTOON)
+        every { videoRepo.observeRoots() } returns flowOf(emptyList())
+        every { prefs.observeVideoOrientation() } returns flowOf(VideoOrientationMode.PORTRAIT)
     }
 
     @After
     fun tearDown() = Dispatchers.resetMain()
 
-    private fun viewModel() = SettingsViewModel(libRepo, prefs, addRoot, scan)
+    private fun viewModel() = SettingsViewModel(
+        libraryRepository = libRepo,
+        videoRepository = videoRepo,
+        preferencesRepository = prefs,
+        addRoot = addRoot,
+        scanLibrary = scan,
+        addVideoRoot = addVideoRoot,
+        removeVideoRoot = removeVideoRoot,
+        scanVideoLibrary = scanVideo,
+    )
 
     @Test
     fun `合成库根与阅读模式状态`() = runTest {

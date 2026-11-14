@@ -1,6 +1,7 @@
 package com.comicnest.core.domain.repository
 
 import com.comicnest.core.model.RecentVideo
+import com.comicnest.core.model.VideoDimensions
 import com.comicnest.core.model.VideoKey
 import com.comicnest.core.model.VideoProgress
 import com.comicnest.core.model.VideoRoot
@@ -47,6 +48,9 @@ interface VideoRepository {
 
     /** 物理删除文件 + 清 MediaStore + 清缩略图 + 删进度行 + 移出缓存（§3.7）。 */
     suspend fun deleteVideo(key: VideoKey): Result<Unit>
+
+    /** 读取视频像素尺寸与旋转角（仅 AUTO 朝向时调用，DESIGN v2 §11.6 R6）。 */
+    suspend fun readDimensions(key: VideoKey): Result<VideoDimensions>
 
     /**
      * 重命名物理文件并迁移缓存/观看记录（[VideoKey] 随文件名变化），返回新 key。

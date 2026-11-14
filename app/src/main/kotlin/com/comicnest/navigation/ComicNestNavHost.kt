@@ -90,16 +90,25 @@ fun ComicNestRoot() {
             }
             composable(Routes.VIDEOS) {
                 VideoLibraryScreen(
-                    onNavigateToPlayer = { videoKeyId ->
-                        navController.navigate("${Routes.VIDEO_PLAYER}/${Uri.encode(videoKeyId)}")
+                    onNavigateToPlayer = { videoKeyId, query ->
+                        navController.navigate(
+                            "${Routes.VIDEO_PLAYER}/${Uri.encode(videoKeyId)}" +
+                                "?${VideoPlayerViewModel.ARG_QUERY}=${Uri.encode(query)}",
+                        )
                     },
                 )
             }
             composable(
-                route = "${Routes.VIDEO_PLAYER}/{${VideoPlayerViewModel.ARG_VIDEO_KEY_ID}}",
+                route = "${Routes.VIDEO_PLAYER}/{${VideoPlayerViewModel.ARG_VIDEO_KEY_ID}}" +
+                    "?${VideoPlayerViewModel.ARG_QUERY}={${VideoPlayerViewModel.ARG_QUERY}}",
                 arguments = listOf(
                     navArgument(VideoPlayerViewModel.ARG_VIDEO_KEY_ID) {
                         type = NavType.StringType
+                    },
+                    // 列表页的搜索词：播放页据此复算「下一个视频」（DESIGN v2 §11.4 R4）
+                    navArgument(VideoPlayerViewModel.ARG_QUERY) {
+                        type = NavType.StringType
+                        defaultValue = ""
                     },
                 ),
             ) {
